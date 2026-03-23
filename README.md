@@ -1,7 +1,7 @@
 # pi Extension: LM Studio Models Sync
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![pi Package](https://img.shields.io/badge/pi-package-1.0.0-orange)](https://github.com/YOUR_USERNAME/pi-lmstudio-models)
+[![pi Package](https://img.shields.io/badge/pi-package-1.0.0-orange)](https://github.com/vampaz/pi-custom-provider-lmstudio)
 
 An extension for the [pi coding agent](https://github.com/badlogic/pi-mono) that automatically fetches and registers available models from LM Studio's Endpoint (`/v1/models`) on startup.
 
@@ -23,7 +23,7 @@ An extension for the [pi coding agent](https://github.com/badlogic/pi-mono) that
 ### Install via pi CLI
 
 ```bash
-pi install git:github.com/YOUR_USERNAME/pi-lmstudio-models@main
+pi install git:github.com/vampaz/pi-custom-provider-lmstudio@main
 ```
 
 ### Manual Installation
@@ -70,8 +70,14 @@ Use the model selector to choose from your LM Studio models:
 ```bash
 cd ~/works/pi-lmstudio-models
 
-# Type-check the code
+# Run oxlint (linting)
 npm run lint
+
+# Format code with oxfmt
+npm run format
+
+# Run tests with vitest
+npm test
 
 # Test in pi (hot-reload)
 pi -e ./index.ts

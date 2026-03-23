@@ -5,7 +5,10 @@
   "type": "module",
   "main": "./index.ts",
   "scripts": {
-    "lint": "tsc --noEmit"
+    "lint": "oxlint --fix",
+    "format": "oxfmt --check",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "keywords": ["pi-package", "lm-studio", "model-sync"],
   "dependencies": {
@@ -13,7 +16,10 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.0.0"
+    "oxc-language-server": "^1.7.0",
+    "oxfmt": "^0.5.0",
+    "typescript": "^5.0.0",
+    "vitest": "^2.0.0"
   },
   "pi": {
     "extensions": ["./index.ts"]
