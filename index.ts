@@ -28,9 +28,7 @@ const LMSTUDIO_MODELS_ENDPOINT = `${LMSTUDIO_EP_BASE_URL}/v1/models`;
 interface LMStudioModel {
   id: string;
   object: string;
-  created: number;
   owned_by: string;
-  roots: string[];
 }
 
 interface LMStudioModelsResponse {
@@ -125,6 +123,7 @@ function convertToProviderModels(
 
 async function fetchLMStudioModels(): Promise<LMStudioModel[]> {
   try {
+    console.log(`[lmstudio-models] Fetching models from ${LMSTUDIO_MODELS_ENDPOINT}`);
     const response = await fetch(LMSTUDIO_MODELS_ENDPOINT);
 
     if (!response.ok) {
@@ -136,6 +135,9 @@ async function fetchLMStudioModels(): Promise<LMStudioModel[]> {
     if (!Array.isArray(data.data)) {
       throw new Error("Invalid response format: expected data.data array");
     }
+
+    console.log(`[lmstudio-models] Received ${data.data.length} models from LM Studio`);
+    data.data.forEach((m) => console.log(`  - ${m.id}`));
 
     return data.data;
   } catch (error) {
@@ -154,6 +156,35 @@ function registerLMStudioProvider(pi: ExtensionAPI, models: LMStudioModel[]) {
     return;
   }
 
+  console.log(`[lmstudio-models] Converting ${providerModels.length} models for pi:`);
+  providerModels.forEach((m) => {
+    console.log(
+      `  - ${m.name} (${m.id}): reasoning=${m.reasoning}, multimodal=${m.multimodal}`,
+    );
+  });
+
+  // Map common model IDs to context windows
+  function getContextWindow(id: string): number {
+    const lowerId = id.toLowerCase();
+    
+    // Large context models
+    if (lowerId.includes("128k") || lowerId.includes("200k")) {
+      return 128000;
+    }
+    
+    // Common context windows
+    if (lowerId.includes("70b") || lowerId.includes("405b")) {
+      return 128000;
+    }
+    
+    if (lowerId.includes("32b") || lowerId.includes("34b")) {
+      return 32768;
+    }
+    
+    // Default
+    return 128000;
+  }
+
   // Register the provider with all fetched models
   pi.registerProvider("lmstudio-ep", {
     baseUrl: LMSTUDIO_EP_BASE_URL,
@@ -166,13 +197,13 @@ function registerLMStudioProvider(pi: ExtensionAPI, models: LMStudioModel[]) {
       multimodal: m.multimodal,
       input: m.multimodal ? ["text", "image"] : ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000, // Default context window
+      contextWindow: getContextWindow(m.id),
       maxTokens: 4096,
     })),
   });
 
   console.log(
-    `[lmstudio-models] Registered ${providerModels.length} models from LM Studio EP`,
+    `[lmstudio-models] Registered provider 'lmstudio-ep' with ${providerModels.length} models`,
   );
 }
 
