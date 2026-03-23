@@ -1,0 +1,21 @@
+{
+  "name": "@pi-extensions/lmstudio-models",
+  "version": "1.0.0",
+  "description": "Automatically fetch and register LM Studio models from EP /v1/models on startup",
+  "type": "module",
+  "main": "./index.ts",
+  "scripts": {
+    "lint": "tsc --noEmit"
+  },
+  "keywords": ["pi-package", "lm-studio", "model-sync"],
+  "dependencies": {
+    "@mariozechner/pi-coding-agent": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}
