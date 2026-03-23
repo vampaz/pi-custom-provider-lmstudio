@@ -2,6 +2,9 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![pi Package](https://img.shields.io/badge/pi-package-1.0.0-orange)](https://github.com/vampaz/pi-custom-provider-lmstudio)
+[![Vitest](https://img.shields.io/badge/tested_with-vitest-00C248.svg)](https://vitest.dev/)
+[![oxlint](https://img.shields.io/badge/lint-oxlint-orange.svg)](https://github.com/oxc-project/oxc)
+[![oxfmt](https://img.shields.io/badge/format-oxfmt-orange.svg)](https://github.com/oxc-project/oxc)
 
 An extension for the [pi coding agent](https://github.com/badlogic/pi-mono) that automatically fetches and registers available models from LM Studio's Endpoint (`/v1/models`) on startup.
 
@@ -69,6 +72,9 @@ Use the model selector to choose from your LM Studio models:
 
 ```bash
 cd ~/works/pi-lmstudio-models
+
+# Install dependencies first
+npm install
 
 # Run oxlint (linting)
 npm run lint
