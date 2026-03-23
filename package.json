@@ -4,22 +4,28 @@
   "description": "Automatically fetch and register LM Studio models from EP /v1/models on startup",
   "type": "module",
   "main": "./index.ts",
+  "files": ["index.ts"],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "lint": "oxlint --fix",
-    "format": "oxfmt --check",
+    "lint": "oxlint .",
+    "format": "oxfmt --check .",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "keywords": ["pi-package", "lm-studio", "model-sync"],
-  "dependencies": {
-    "@mariozechner/pi-coding-agent": "^1.0.0"
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "oxc-language-server": "^1.7.0",
-    "oxfmt": "^0.5.0",
-    "typescript": "^5.0.0",
-    "vitest": "^2.0.0"
+    "@mariozechner/pi-coding-agent": "^0.62.0",
+    "@types/node": "^25.5.0",
+    "oxfmt": "^0.41.0",
+    "oxlint": "^1.56.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.1"
   },
   "pi": {
     "extensions": ["./index.ts"]

@@ -8,9 +8,10 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
+    "types": ["node", "vitest/globals"],
     "outDir": "./dist",
     "rootDir": "./"
   },
-  "include": ["*.ts"],
+  "include": ["index.ts", "src/**/*.ts", "vite.config.ts"],
   "exclude": ["node_modules"]
 }

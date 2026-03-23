@@ -17,13 +17,13 @@ Thanks for your interest in contributing! This document describes how to contrib
 
 ## Development Workflow
 
-1. Make your changes in the `index.ts` file
+1. Make the smallest set of source, test, and documentation changes needed
 2. Test with:
    ```bash
-   pi -e ~/works/pi-lmstudio-models/index.ts
+   pi -e ~/works/pi-lmstudio-models
    ```
-3. Run `npm run lint` to check for TypeScript errors
-4. Commit your changes and open a PR
+3. Run `npm run lint`, `npm run typecheck`, and `npm test`
+4. Open a PR when the checks are green
 
 ## Pull Request Process
 
@@ -35,7 +35,7 @@ Thanks for your interest in contributing! This document describes how to contrib
 
 - Follow TypeScript best practices
 - Use consistent indentation (2 spaces)
-- Add comments for complex logic
+- Prefer small, testable helpers over inline branching
 
 ## Questions?
 

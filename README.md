@@ -6,14 +6,16 @@
 [![oxlint](https://img.shields.io/badge/lint-oxlint-orange.svg)](https://github.com/oxc-project/oxc)
 [![oxfmt](https://img.shields.io/badge/format-oxfmt-orange.svg)](https://github.com/oxc-project/oxc)
 
-An extension for the [pi coding agent](https://github.com/badlogic/pi-mono) that automatically fetches and registers available models from LM Studio's Endpoint (`/v1/models`) on startup.
+An extension for the [pi coding agent](https://github.com/badlogic/pi-mono) that fetches models from LM Studio's Endpoint (`/v1/models`) and registers them as a pi provider.
 
 ## Features
 
 - **Auto-sync**: Fetches models from LM Studio EP on pi session start
 - **Dynamic Registration**: Models appear in the model selector immediately
 - **Manual Refresh**: `/lmstudio-refresh` command to update models manually
-- **Smart Detection**: Automatically detects reasoning and multimodal model capabilities
+- **Safer Defaults**: Uses explicit model-id hints for context windows and falls back conservatively
+- **Smart Detection**: Detects reasoning and multimodal capabilities from explicit markers instead of broad family matches
+- **Robust Refresh**: Filters blank and duplicate model IDs before registering models
 
 ## Requirements
 
@@ -27,6 +29,12 @@ An extension for the [pi coding agent](https://github.com/badlogic/pi-mono) that
 
 ```bash
 pi install git:github.com/vampaz/pi-custom-provider-lmstudio@main
+```
+
+You can also try the local package without installing it globally:
+
+```bash
+pi -e .
 ```
 
 ### Manual Installation
@@ -66,7 +74,8 @@ Use the model selector to choose from your LM Studio models:
 - **Provider Name**: `lmstudio-ep`
 - **Base URL**: `http://localhost:1234`
 - **API Type**: OpenAI-compatible completions
-- **API Key**: Optional (can be set via `LMSTUDIO_API_KEY` env var)
+- **API Key**: Optional Bearer token via `LMSTUDIO_API_KEY`
+- **Default Context Window**: `8192` tokens when the model ID does not include an explicit `8k`, `32k`, `128k`, or `1m` style hint
 
 ## Development
 
@@ -76,17 +85,20 @@ cd ~/works/pi-lmstudio-models
 # Install dependencies first
 npm install
 
-# Run oxlint (linting)
+# Run linting
 npm run lint
 
-# Format code with oxfmt
+# Run type-checking
+npm run typecheck
+
+# Check formatting
 npm run format
 
 # Run tests with vitest
 npm test
 
 # Test in pi (hot-reload)
-pi -e ./index.ts
+pi -e .
 ```
 
 ## Example LM Studio Models Response
@@ -112,6 +124,10 @@ pi -e ./index.ts
 - Ensure LM Studio is running with the Endpoint server enabled
 - Check that `http://localhost:1234/v1/models` is accessible in your browser
 - Check the pi debug output for error messages
+
+### Wrong context window or capabilities
+- Add explicit hints to the LM Studio model ID when possible, such as `32k`, `128k`, `vision`, or `thinking`
+- Use `/lmstudio-refresh` after renaming or reloading models in LM Studio
 
 ### Connection refused
 If you see "Failed to fetch models from LM Studio EP: TypeError: Failed to fetch":

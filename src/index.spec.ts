@@ -1,182 +1,327 @@
-/**
- * Unit tests for LM Studio Models Extension
- */
+import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { describe, it, expect } from "vitest";
+import registerLMStudioExtension, {
+  convertToProviderModels,
+  fetchLMStudioModels,
+  inferContextWindow,
+  inferModelCapabilities,
+  normalizeModelName,
+  registerLMStudioProvider,
+  sanitizeLMStudioModels,
+} from '../index';
 
-// =============================================================================
-// normalizeModelName Tests
-// =============================================================================
+interface MockCommandContext {
+  ui: {
+    notify: ReturnType<typeof vi.fn>;
+  };
+}
 
-describe("normalizeModelName", () => {
-  const testCases: Array<{ input: string; expected: string }> = [
-    // org/model format (common in LM Studio)
-    { input: "qwen/qwen3-coder-next", expected: "Qwen 3 Coder Next" },
-    { input: "nvidia/nemotron-3-super", expected: "Nvidia Nemotron 3 Super" },
-    { input: "zai-org/glm-4.7-flash", expected: "Zai Org Glm 4.7 Flash" },
-    { input: "openai/gpt-4o-mini", expected: "Openai Gpt 4o Mini" },
-    { input: "anthropic/claude-3-5-sonnet", expected: "Anthropic Claude 3.5 Sonnet" },
-    
-    // @ format
-    { input: "model@123456", expected: "Model 123456" },
-    
-    // File extensions
-    { input: "model.gguf", expected: "Model" },
-    { input: "model.bin", expected: "Model" },
-    { input: "model.pt", expected: "Model" },
-    { input: "model.safetensors", expected: "Model" },
-    
-    // Mixed separators
-    { input: "deepseek-r1", expected: "Deepseek R1" },
-    { input: "qwen_3_coder", expected: "Qwen 3 Coder" },
-    
-    // Complex cases
-    { input: "llava-1.6", expected: "Llava 1.6" },
-    { input: "gemini-2-flash", expected: "Gemini 2 Flash" },
-    
-    // Already normalized
-    { input: "simple-model", expected: "Simple Model" },
-  ];
+interface MockExtensionRuntime {
+  pi: ExtensionAPI;
+  registerProvider: ReturnType<typeof vi.fn>;
+  unregisterProvider: ReturnType<typeof vi.fn>;
+  runRefresh: (ctx?: MockCommandContext) => Promise<MockCommandContext>;
+  runSessionStart: () => Promise<void>;
+}
 
-  it("should normalize model names correctly", () => {
-    // Note: This test validates the expected behavior
-    // The actual implementation is in index.ts
-    
-    testCases.forEach(({ input, expected }) => {
-      // Expected behavior: org/model format should extract model part
-      if (input.includes("/")) {
-        const parts = input.split("/");
-        const modelName = parts.pop() ?? "";
-        
-        // File extensions should be removed
-        const withoutExtension = modelName.replace(/\.(gguf|bin|pt|safetensors)$/i, "");
-        
-        // Separators should be replaced with spaces and capitalized
-        const normalized = withoutExtension
-          .replace(/[-_]/g, " ")
-          .split(" ")
-          .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-          .join(" ");
-        
-        expect(normalized).toBe(expected);
+function createMockCommandContext(): MockCommandContext {
+  return {
+    ui: {
+      notify: vi.fn(),
+    },
+  };
+}
+
+function createMockExtensionRuntime(): MockExtensionRuntime {
+  let sessionStartHandler:
+    | ((event: unknown, ctx: unknown) => Promise<void> | void)
+    | undefined;
+  let refreshHandler:
+    | ((args: string[], ctx: MockCommandContext) => Promise<void>)
+    | undefined;
+
+  const registerProvider = vi.fn();
+  const unregisterProvider = vi.fn();
+
+  const pi = {
+    on: vi.fn((event: string, handler: (event: unknown, ctx: unknown) => Promise<void> | void) => {
+      if (event === 'session_start') {
+        sessionStartHandler = handler;
       }
-    });
-  });
+    }),
+    registerCommand: vi.fn((name: string, command: { handler: (args: string[], ctx: MockCommandContext) => Promise<void> }) => {
+      if (name === 'lmstudio-refresh') {
+        refreshHandler = command.handler;
+      }
+    }),
+    registerProvider,
+    unregisterProvider,
+  } as unknown as ExtensionAPI;
 
-  it("should handle org/model format correctly", () => {
-    expect("qwen3-coder-next").toBe("qwen3-coder-next");
-    expect("nvidia/nemotron-3-super".split("/").pop()).toBe("nemotron-3-super");
-  });
+  return {
+    pi,
+    registerProvider,
+    unregisterProvider,
+    async runRefresh(ctx = createMockCommandContext()) {
+      if (!refreshHandler) {
+        throw new Error('Refresh handler was not registered');
+      }
 
-  it("should remove file extensions", () => {
-    expect("model.gguf".replace(/\.(gguf|bin|pt|safetensors)$/i, "")).toBe("model");
-    expect("test.bin".replace(/\.(gguf|bin|pt|safetensors)$/i, "")).toBe("test");
+      await refreshHandler([], ctx);
+      return ctx;
+    },
+    async runSessionStart() {
+      if (!sessionStartHandler) {
+        throw new Error('Session start handler was not registered');
+      }
+
+      await sessionStartHandler({}, {});
+    },
+  };
+}
+
+function createResponse(body: unknown, init?: ResponseInit): Response {
+  return new Response(JSON.stringify(body), {
+    headers: {
+      'content-type': 'application/json',
+    },
+    status: 200,
+    ...init,
+  });
+}
+
+describe('normalizeModelName', () => {
+  it.each([
+    ['qwen/qwen3-coder-next', 'Qwen 3 Coder Next'],
+    ['nvidia/nemotron-3-super', 'Nemotron 3 Super'],
+    ['zai-org/glm-4.7-flash', 'Glm 4.7 Flash'],
+    ['openai/gpt-4o-mini', 'Gpt 4o Mini'],
+    ['anthropic/claude-3-5-sonnet', 'Claude 3.5 Sonnet'],
+    ['model@123456', 'Model 123456'],
+    ['qwen_3_coder', 'Qwen 3 Coder'],
+    ['model.gguf', 'Model'],
+  ])('normalizes %s', (input, expected) => {
+    expect(normalizeModelName(input)).toBe(expected);
   });
 });
 
-// =============================================================================
-// inferModelCapabilities Tests
-// =============================================================================
-
-describe("inferModelCapabilities", () => {
-  const reasoningTests = [
-    "deepseek-r1",
-    "qwen3-reasoning",
-    "command-r-plus",
-    "openai-o1-preview",
-    "gemini-2-flash-thinking",
-  ];
-
-  const multimodalTests = [
-    "llava-1.6",
-    "qwen2-vl",
-    "gemini-2-flash-vision",
-  ];
-
-  it("should detect reasoning models", () => {
-    reasoningTests.forEach((modelId) => {
-      const lowerId = modelId.toLowerCase();
-      const hasReasoning = [
-        "reasoning",
-        "deepseek-r1",
-        "command-r",
-        "openai-o",
-        "gemini-2",
-      ].some((p) => lowerId.includes(p));
-      
-      expect(hasReasoning).toBe(true);
-    });
+describe('inferModelCapabilities', () => {
+  it('detects reasoning models without overmatching model families', () => {
+    expect(inferModelCapabilities('deepseek-r1-distill-qwen-32b').reasoning).toBe(true);
+    expect(inferModelCapabilities('openai/o1-mini').reasoning).toBe(true);
+    expect(inferModelCapabilities('gemini-2-flash-thinking').reasoning).toBe(true);
+    expect(inferModelCapabilities('qwen3-coder-next').reasoning).toBe(false);
+    expect(inferModelCapabilities('gemini-2-flash').reasoning).toBe(false);
   });
 
-  it("should detect multimodal models", () => {
-    multimodalTests.forEach((modelId) => {
-      const lowerId = modelId.toLowerCase();
-      const isMultimodal = ["vision", "vl", "llava"].some((p) => lowerId.includes(p));
-      
-      expect(isMultimodal).toBe(true);
-    });
+  it('detects multimodal models from explicit multimodal markers', () => {
+    expect(inferModelCapabilities('qwen2-vl-7b-instruct').multimodal).toBe(true);
+    expect(inferModelCapabilities('llava-1.6').multimodal).toBe(true);
+    expect(inferModelCapabilities('pixtral-12b').multimodal).toBe(true);
+    expect(inferModelCapabilities('gemini-2-flash').multimodal).toBe(false);
+  });
+});
+
+describe('inferContextWindow', () => {
+  it('uses explicit context markers from the model ID', () => {
+    expect(inferContextWindow('qwen-200k')).toBe(200000);
+    expect(inferContextWindow('mistral-small-128k')).toBe(128000);
+    expect(inferContextWindow('model-1m')).toBe(1000000);
   });
 
-  it("should not flag non-reasoning models as reasoning", () => {
-    const nonReasoning = ["qwen3-coder-next", "gpt-4o", "claude-3-5-sonnet"];
-    
-    nonReasoning.forEach((modelId) => {
-      const lowerId = modelId.toLowerCase();
-      const hasReasoning = [
-        "reasoning",
-        "deepseek-r1",
-        "command-r",
-        "openai-o",
-        "gemini-2",
-      ].some((p) => lowerId.includes(p));
-      
-      expect(hasReasoning).toBe(false);
+  it('falls back to a conservative default when the model ID has no context hint', () => {
+    expect(inferContextWindow('llama-3.1-70b-instruct')).toBe(8192);
+    expect(inferContextWindow('claude-3-5-sonnet')).toBe(8192);
+  });
+});
+
+describe('sanitizeLMStudioModels', () => {
+  it('filters blank and duplicate model IDs', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const models = sanitizeLMStudioModels([
+      { id: '  qwen/qwen3-coder-next  ', object: 'model', owned_by: 'lmstudio' },
+      { id: '', object: 'model', owned_by: 'lmstudio' },
+      { id: 'qwen/qwen3-coder-next', object: 'model', owned_by: 'lmstudio' },
+    ]);
+
+    expect(models).toEqual([
+      { id: 'qwen/qwen3-coder-next', object: 'model', owned_by: 'lmstudio' },
+    ]);
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('convertToProviderModels', () => {
+  it('maps LM Studio models into provider models', () => {
+    expect(
+      convertToProviderModels([
+        { id: 'qwen/qwen3-coder-next', object: 'model', owned_by: 'lmstudio' },
+        { id: 'qwen/qwen2-vl-7b-32k', object: 'model', owned_by: 'lmstudio' },
+      ]),
+    ).toEqual([
+      {
+        id: 'qwen/qwen3-coder-next',
+        name: 'Qwen 3 Coder Next',
+        reasoning: false,
+        multimodal: false,
+      },
+      {
+        id: 'qwen/qwen2-vl-7b-32k',
+        name: 'Qwen 2 Vl 7b 32k',
+        reasoning: false,
+        multimodal: true,
+      },
+    ]);
+  });
+});
+
+describe('fetchLMStudioModels', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('returns the model list when LM Studio responds successfully', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        createResponse({
+          object: 'list',
+          data: [{ id: 'qwen/qwen3-coder-next', object: 'model', owned_by: 'lmstudio' }],
+        }),
+      ),
+    );
+
+    await expect(fetchLMStudioModels()).resolves.toEqual([
+      { id: 'qwen/qwen3-coder-next', object: 'model', owned_by: 'lmstudio' },
+    ]);
+  });
+
+  it('returns an empty list when the response body is invalid', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(createResponse({ object: 'list', data: null })),
+    );
+
+    await expect(fetchLMStudioModels()).resolves.toEqual([]);
+    expect(console.warn).toHaveBeenCalledOnce();
+  });
+});
+
+describe('registerLMStudioProvider', () => {
+  it('registers the provider with pi-compatible model definitions', () => {
+    const runtime = createMockExtensionRuntime();
+
+    const registeredCount = registerLMStudioProvider(runtime.pi, [
+      {
+        id: 'qwen/qwen2-vl-7b-32k',
+        name: 'Qwen 2 Vl 7b 32k',
+        reasoning: false,
+        multimodal: true,
+      },
+    ]);
+
+    expect(registeredCount).toBe(1);
+    expect(runtime.registerProvider).toHaveBeenCalledWith('lmstudio-ep', {
+      baseUrl: 'http://localhost:1234',
+      apiKey: 'LMSTUDIO_API_KEY',
+      authHeader: true,
+      api: 'openai-completions',
+      models: [
+        {
+          id: 'qwen/qwen2-vl-7b-32k',
+          name: 'Qwen 2 Vl 7b 32k',
+          reasoning: false,
+          input: ['text', 'image'],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 32000,
+          maxTokens: 4096,
+        },
+      ],
     });
   });
 });
 
-// =============================================================================
-// getContextWindow Tests
-// =============================================================================
-
-describe("getContextWindow", () => {
-  it("should return 128000 for large context models", () => {
-    const largeContext = ["llama-3.1-405b", "qwen-200k", "mistral-128k"];
-    
-    largeContext.forEach((modelId) => {
-      const lowerId = modelId.toLowerCase();
-      
-      if (lowerId.includes("128k") || lowerId.includes("200k")) {
-        expect(128000).toBe(128000);
-      }
-    });
+describe('registerLMStudioExtension', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
 
-  it("should return 128000 for common context window models", () => {
-    const commonContext = ["gpt-4o", "claude-3-opus", "llama-70b", "qwen-405b"];
-    
-    commonContext.forEach((modelId) => {
-      const lowerId = modelId.toLowerCase();
-      
-      if (lowerId.includes("70b") || lowerId.includes("405b")) {
-        expect(128000).toBe(128000);
-      }
-    });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
-  it("should return 32768 for medium context window models", () => {
-    const mediumContext = ["gpt-4-turbo", "claude-3.5-sonnet", "llama-32b", "mistral-34b"];
-    
-    mediumContext.forEach((modelId) => {
-      const lowerId = modelId.toLowerCase();
-      
-      if (lowerId.includes("32b") || lowerId.includes("34b")) {
-        expect(32768).toBe(32768);
-      }
-    });
+  it('registers models on session start', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        createResponse({
+          object: 'list',
+          data: [{ id: 'qwen/qwen2-vl-7b-32k', object: 'model', owned_by: 'lmstudio' }],
+        }),
+      ),
+    );
+
+    const runtime = createMockExtensionRuntime();
+    registerLMStudioExtension(runtime.pi);
+
+    await runtime.runSessionStart();
+
+    expect(runtime.registerProvider).toHaveBeenCalledOnce();
   });
 
-  it("should return default context window", () => {
-    expect(128000).toBe(128000);
+  it('refreshes the provider only when valid models are available', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        createResponse({
+          object: 'list',
+          data: [{ id: 'qwen/qwen3-coder-next', object: 'model', owned_by: 'lmstudio' }],
+        }),
+      ),
+    );
+
+    const runtime = createMockExtensionRuntime();
+    registerLMStudioExtension(runtime.pi);
+
+    const ctx = await runtime.runRefresh();
+
+    expect(runtime.unregisterProvider).toHaveBeenCalledWith('lmstudio-ep');
+    expect(ctx.ui.notify).toHaveBeenNthCalledWith(1, 'Fetching LM Studio models...', 'info');
+    expect(ctx.ui.notify).toHaveBeenNthCalledWith(2, 'Updated 1 LM Studio model(s)', 'info');
+  });
+
+  it('keeps the existing provider when refresh finds no valid models', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        createResponse({
+          object: 'list',
+          data: [{ id: '', object: 'model', owned_by: 'lmstudio' }],
+        }),
+      ),
+    );
+
+    const runtime = createMockExtensionRuntime();
+    registerLMStudioExtension(runtime.pi);
+
+    const ctx = await runtime.runRefresh();
+
+    expect(runtime.unregisterProvider).not.toHaveBeenCalled();
+    expect(runtime.registerProvider).not.toHaveBeenCalled();
+    expect(ctx.ui.notify).toHaveBeenNthCalledWith(
+      2,
+      'No valid models found or LM Studio is not running',
+      'error',
+    );
   });
 });

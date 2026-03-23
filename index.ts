@@ -3,29 +3,46 @@
  *
  * Fetches available models from LM Studio's EP /v1/models endpoint on startup
  * and dynamically registers them as available providers.
- *
- * Installation:
- *   The extension is auto-discovered from ~/.pi/agent/extensions/lmstudio-models/
- *
- * Usage:
- *   - Models are automatically fetched on startup (session_start event)
- *   - Run /lmstudio-refresh to manually update models from LM Studio
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
 
 // =============================================================================
 // Constants
 // =============================================================================
 
-const LMSTUDIO_EP_BASE_URL = "http://localhost:1234";
+const LMSTUDIO_EP_BASE_URL = 'http://localhost:1234';
 const LMSTUDIO_MODELS_ENDPOINT = `${LMSTUDIO_EP_BASE_URL}/v1/models`;
+const LMSTUDIO_PROVIDER_NAME = 'lmstudio-ep';
+const LMSTUDIO_REFRESH_COMMAND = 'lmstudio-refresh';
+const DEFAULT_CONTEXT_WINDOW = 8192;
+const DEFAULT_MAX_TOKENS = 4096;
+const MODEL_FILE_EXTENSION_PATTERN = /\.(gguf|bin|pt|safetensors)$/i;
+const CONTEXT_WINDOW_PATTERN = /(?:^|[^a-z0-9])(\d+)(k|m)(?=$|[^a-z0-9])/i;
+const REASONING_PATTERNS = [
+  /reason(?:ing)?/i,
+  /thinking/i,
+  /deepseek-r1/i,
+  /command-r/i,
+  /(?:^|[-_/])o1(?:[-_/]|$)/i,
+  /(?:^|[-_/])o3(?:[-_/]|$)/i,
+  /(?:^|[-_/])o4-mini(?:[-_/]|$)/i,
+];
+const MULTIMODAL_PATTERNS = [
+  /vision/i,
+  /(?:^|[-_/])vl(?:[-_/]|$)/i,
+  /llava/i,
+  /bakllava/i,
+  /minicpm-v/i,
+  /pixtral/i,
+  /paligemma/i,
+];
 
 // =============================================================================
 // Types
 // =============================================================================
 
-interface LMStudioModel {
+export interface LMStudioModel {
   id: string;
   object: string;
   owned_by: string;
@@ -36,6 +53,13 @@ interface LMStudioModelsResponse {
   data: LMStudioModel[];
 }
 
+export interface LMStudioProviderModel {
+  id: string;
+  name: string;
+  reasoning: boolean;
+  multimodal: boolean;
+}
+
 // =============================================================================
 // Model Processing
 // =============================================================================
@@ -43,56 +67,40 @@ interface LMStudioModelsResponse {
 /**
  * Convert LM Studio model ID to a normalized name
  */
-function normalizeModelName(id: string): string {
-  // Remove common prefixes and suffixes for cleaner display
-  let name = id;
+export function normalizeModelName(id: string): string {
+  let name = id.trim();
 
-  // Remove org/model prefixes (e.g., "qwen/qwen3-coder-next" -> "qwen3-coder-next")
-  if (name.includes("/")) {
-    name = name.split("/").pop() ?? name;
+  if (name.includes('/')) {
+    name = name.split('/').pop() ?? name;
   }
 
-  // Remove path-like prefixes (e.g., "model@")
-  if (name.includes("@")) {
-    name = name.split("@").pop() ?? name;
-  }
+  name = name.replace(/@/g, ' ');
+  name = name.replace(MODEL_FILE_EXTENSION_PATTERN, '');
 
-  // Remove file extensions
-  name = name.replace(/\.(gguf|bin|pt|safetensors)$/i, "");
+  name = name
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 
-  // Replace common separators with spaces
-  name = name.replace(/[-_]/g, " ");
+  name = name
+    .replace(/\b(\d)\s+(\d)\b/g, '$1.$2')
+    .replace(/([a-z]{2,})(\d+)/gi, '$1 $2');
 
-  // Capitalize words
   return name
-    .split(" ")
+    .split(' ')
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
+    .join(' ');
 }
 
 /**
  * Determine model capabilities based on ID
  */
-function inferModelCapabilities(modelId: string): {
+export function inferModelCapabilities(modelId: string): {
   reasoning: boolean;
   multimodal: boolean;
 } {
-  const lowerId = modelId.toLowerCase();
-
-  // Reasoning models (common patterns)
-  const reasoningPatterns = [
-    "reasoning",
-    "deepseek-r1",
-    "qwen3",
-    "command-r",
-    "openai-o",
-    "gemini-2",
-  ];
-  const hasReasoning = reasoningPatterns.some((p) => lowerId.includes(p));
-
-  // Multimodal models (common patterns)
-  const multimodalPatterns = ["vision", "vl", "llava", "qwen2-vl", "gemini-2"];
-  const isMultimodal = multimodalPatterns.some((p) => lowerId.includes(p));
+  const hasReasoning = REASONING_PATTERNS.some((pattern) => pattern.test(modelId));
+  const isMultimodal = MULTIMODAL_PATTERNS.some((pattern) => pattern.test(modelId));
 
   return {
     reasoning: hasReasoning,
@@ -101,17 +109,59 @@ function inferModelCapabilities(modelId: string): {
 }
 
 /**
- * Convert LM Studio models to pi provider model format
+ * Infer a model's context window from explicit hints in the model ID.
  */
-function convertToProviderModels(
+export function inferContextWindow(modelId: string): number {
+  const match = modelId.match(CONTEXT_WINDOW_PATTERN);
+
+  if (!match) {
+    return DEFAULT_CONTEXT_WINDOW;
+  }
+
+  const value = match[1];
+  const unit = match[2];
+
+  if (!value || !unit) {
+    return DEFAULT_CONTEXT_WINDOW;
+  }
+
+  const multiplier = unit.toLowerCase() === 'm' ? 1000000 : 1000;
+  return Number(value) * multiplier;
+}
+
+/**
+ * Filter invalid or duplicate models before registration.
+ */
+export function sanitizeLMStudioModels(
   lmStudioModels: LMStudioModel[],
-): Array<{
-  id: string;
-  name: string;
-  reasoning: boolean;
-  multimodal: boolean;
-}> {
-  return lmStudioModels.map((model) => {
+): LMStudioModel[] {
+  const seenIds = new Set<string>();
+
+  return lmStudioModels.flatMap((model) => {
+    const id = model.id.trim();
+
+    if (id.length === 0) {
+      console.warn('[lmstudio-models] Skipping model without an ID');
+      return [];
+    }
+
+    if (seenIds.has(id)) {
+      console.warn(`[lmstudio-models] Skipping duplicate model '${id}'`);
+      return [];
+    }
+
+    seenIds.add(id);
+    return [{ ...model, id }];
+  });
+}
+
+/**
+ * Convert LM Studio models to pi provider model format.
+ */
+export function convertToProviderModels(
+  lmStudioModels: LMStudioModel[],
+): LMStudioProviderModel[] {
+  return sanitizeLMStudioModels(lmStudioModels).map((model) => {
     const { reasoning, multimodal } = inferModelCapabilities(model.id);
     return {
       id: model.id,
@@ -126,7 +176,7 @@ function convertToProviderModels(
 // Provider Registration
 // =============================================================================
 
-async function fetchLMStudioModels(): Promise<LMStudioModel[]> {
+export async function fetchLMStudioModels(): Promise<LMStudioModel[]> {
   try {
     console.log(`[lmstudio-models] Fetching models from ${LMSTUDIO_MODELS_ENDPOINT}`);
     const response = await fetch(LMSTUDIO_MODELS_ENDPOINT);
@@ -138,7 +188,7 @@ async function fetchLMStudioModels(): Promise<LMStudioModel[]> {
     const data = (await response.json()) as LMStudioModelsResponse;
 
     if (!Array.isArray(data.data)) {
-      throw new Error("Invalid response format: expected data.data array");
+      throw new Error('Invalid response format: expected data.data array');
     }
 
     console.log(`[lmstudio-models] Received ${data.data.length} models from LM Studio`);
@@ -153,12 +203,13 @@ async function fetchLMStudioModels(): Promise<LMStudioModel[]> {
   }
 }
 
-function registerLMStudioProvider(pi: ExtensionAPI, models: LMStudioModel[]) {
-  const providerModels = convertToProviderModels(models);
-
+export function registerLMStudioProvider(
+  pi: ExtensionAPI,
+  providerModels: LMStudioProviderModel[],
+): number {
   if (providerModels.length === 0) {
-    console.warn("[lmstudio-models] No valid models found to register");
-    return;
+    console.warn('[lmstudio-models] No valid models found to register');
+    return 0;
   }
 
   console.log(`[lmstudio-models] Converting ${providerModels.length} models for pi:`);
@@ -168,83 +219,55 @@ function registerLMStudioProvider(pi: ExtensionAPI, models: LMStudioModel[]) {
     );
   });
 
-  // Map common model IDs to context windows
-  function getContextWindow(id: string): number {
-    const lowerId = id.toLowerCase();
-    
-    // Large context models
-    if (lowerId.includes("128k") || lowerId.includes("200k")) {
-      return 128000;
-    }
-    
-    // Common context windows
-    if (lowerId.includes("70b") || lowerId.includes("405b")) {
-      return 128000;
-    }
-    
-    if (lowerId.includes("32b") || lowerId.includes("34b")) {
-      return 32768;
-    }
-    
-    // Default
-    return 128000;
-  }
-
-  // Register the provider with all fetched models
-  pi.registerProvider("lmstudio-ep", {
+  pi.registerProvider(LMSTUDIO_PROVIDER_NAME, {
     baseUrl: LMSTUDIO_EP_BASE_URL,
-    apiKey: "LMSTUDIO_API_KEY", // Optional API key
-    api: "openai-completions",
+    apiKey: 'LMSTUDIO_API_KEY',
+    authHeader: true,
+    api: 'openai-completions',
     models: providerModels.map((m) => ({
       id: m.id,
       name: m.name,
       reasoning: m.reasoning,
-      multimodal: m.multimodal,
-      input: m.multimodal ? ["text", "image"] : ["text"],
+      input: m.multimodal ? ['text', 'image'] : ['text'],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: getContextWindow(m.id),
-      maxTokens: 4096,
+      contextWindow: inferContextWindow(m.id),
+      maxTokens: DEFAULT_MAX_TOKENS,
     })),
   });
 
   console.log(
-    `[lmstudio-models] Registered provider 'lmstudio-ep' with ${providerModels.length} models`,
+    `[lmstudio-models] Registered provider '${LMSTUDIO_PROVIDER_NAME}' with ${providerModels.length} models`,
   );
+
+  return providerModels.length;
 }
 
 // =============================================================================
 // Extension Entry Point
 // =============================================================================
 
-export default function (pi: ExtensionAPI) {
-  // Fetch models on session start
-  pi.on("session_start", async (_event, _ctx) => {
-    const models = await fetchLMStudioModels();
-    registerLMStudioProvider(pi, models);
+export default function registerLMStudioExtension(pi: ExtensionAPI) {
+  pi.on('session_start', async (_event, _ctx) => {
+    const providerModels = convertToProviderModels(await fetchLMStudioModels());
+    registerLMStudioProvider(pi, providerModels);
   });
 
-  // Optional: Add a command to manually refresh models
-  pi.registerCommand("lmstudio-refresh", {
-    description: "Refresh LM Studio models from EP /v1/models",
+  pi.registerCommand(LMSTUDIO_REFRESH_COMMAND, {
+    description: 'Refresh LM Studio models from EP /v1/models',
     handler: async (_args, ctx) => {
-      ctx.ui.notify("Fetching LM Studio models...", "info");
-      
-      const models = await fetchLMStudioModels();
-      
-      if (models.length > 0) {
-        // Unregister existing provider first
-        pi.unregisterProvider("lmstudio-ep");
-        
-        // Register new models
-        registerLMStudioProvider(pi, models);
-        
-        ctx.ui.notify(
-          `Updated ${models.length} LM Studio model(s)`,
-          "success",
-        );
-      } else {
-        ctx.ui.notify("No models found or LM Studio not running", "error");
+      ctx.ui.notify('Fetching LM Studio models...', 'info');
+
+      const providerModels = convertToProviderModels(await fetchLMStudioModels());
+
+      if (providerModels.length === 0) {
+        ctx.ui.notify('No valid models found or LM Studio is not running', 'error');
+        return;
       }
+
+      pi.unregisterProvider(LMSTUDIO_PROVIDER_NAME);
+      const registeredCount = registerLMStudioProvider(pi, providerModels);
+
+      ctx.ui.notify(`Updated ${registeredCount} LM Studio model(s)`, 'info');
     },
   });
 }
