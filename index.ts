@@ -47,6 +47,11 @@ function normalizeModelName(id: string): string {
   // Remove common prefixes and suffixes for cleaner display
   let name = id;
 
+  // Remove org/model prefixes (e.g., "qwen/qwen3-coder-next" -> "qwen3-coder-next")
+  if (name.includes("/")) {
+    name = name.split("/").pop() ?? name;
+  }
+
   // Remove path-like prefixes (e.g., "model@")
   if (name.includes("@")) {
     name = name.split("@").pop() ?? name;
