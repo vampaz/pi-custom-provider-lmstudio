@@ -49,12 +49,15 @@ cp -r ~/works/pi-lmstudio-models ~/.pi/agent/extensions/lmstudio-models
 ## Usage
 
 ### Automatic (on startup)
+
 When you start a new pi session, the extension will automatically:
+
 1. Fetch models from `http://localhost:1234/v1/models`
 2. Register them as the `lmstudio-ep` provider
 3. Make models available in the model selector
 
 ### Manual refresh
+
 Run `/lmstudio-refresh` to manually fetch and update models:
 
 ```
@@ -62,6 +65,7 @@ Run `/lmstudio-refresh` to manually fetch and update models:
 ```
 
 ### Select LM Studio models
+
 Use the model selector to choose from your LM Studio models:
 
 ```
@@ -72,7 +76,7 @@ Use the model selector to choose from your LM Studio models:
 ## Provider Configuration
 
 - **Provider Name**: `lmstudio-ep`
-- **Base URL**: `http://localhost:1234`
+- **Base URL**: Configurable via `LMSTUDIO_ENDPOINT_URL` env var, defaults to `http://localhost:1234`
 - **API Type**: OpenAI-compatible completions
 - **API Key**: Optional Bearer token via `LMSTUDIO_API_KEY`
 - **Default Context Window**: `8192` tokens when the model ID does not include an explicit `8k`, `32k`, `128k`, or `1m` style hint
@@ -97,7 +101,25 @@ npm run format
 # Run tests with vitest
 npm test
 
+# Run integration tests (requires local LM Studio running on port 1234)
+npm run test:integration
+
 # Test in pi (hot-reload)
+pi -e .
+```
+
+### Environment Variables
+
+You can customize the extension behavior using environment variables:
+
+| Variable                | Description                   | Default                 |
+| ----------------------- | ----------------------------- | ----------------------- |
+| `LMSTUDIO_ENDPOINT_URL` | Custom LM Studio endpoint URL | `http://localhost:1234` |
+
+Example:
+
+```bash
+export LMSTUDIO_ENDPOINT_URL=http://localhost:1234
 pi -e .
 ```
 
@@ -121,18 +143,22 @@ pi -e .
 ## Troubleshooting
 
 ### Models not showing up
+
 - Ensure LM Studio is running with the Endpoint server enabled
 - Check that `http://localhost:1234/v1/models` is accessible in your browser
 - Check the pi debug output for error messages
 
 ### Wrong context window or capabilities
+
 - Add explicit hints to the LM Studio model ID when possible, such as `32k`, `128k`, `vision`, or `thinking`
 - Use `/lmstudio-refresh` after renaming or reloading models in LM Studio
 
 ### Connection refused
+
 If you see "Failed to fetch models from LM Studio EP: TypeError: Failed to fetch":
-- Verify LM Studio's Endpoint is running on port 1234
-- Change the default URL in `index.ts` if your LM Studio EP uses a different port
+
+- Verify LM Studio's Endpoint is running on port 1234 (or the custom URL set in `LMSTUDIO_ENDPOINT_URL`)
+- To use a custom endpoint, set the environment variable: `export LMSTUDIO_ENDPOINT_URL=http://your-custom-url:port`
 
 ## License
 

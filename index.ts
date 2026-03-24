@@ -5,16 +5,18 @@
  * and dynamically registers them as available providers.
  */
 
-import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 // =============================================================================
 // Constants
 // =============================================================================
 
-const LMSTUDIO_EP_BASE_URL = 'http://localhost:1234';
+const DEFAULT_LMSTUDIO_EP_BASE_URL = "http://localhost:1234";
+export const LMSTUDIO_EP_BASE_URL =
+  process.env.LMSTUDIO_ENDPOINT_URL || DEFAULT_LMSTUDIO_EP_BASE_URL;
 const LMSTUDIO_MODELS_ENDPOINT = `${LMSTUDIO_EP_BASE_URL}/v1/models`;
-const LMSTUDIO_PROVIDER_NAME = 'lmstudio-ep';
-const LMSTUDIO_REFRESH_COMMAND = 'lmstudio-refresh';
+const LMSTUDIO_PROVIDER_NAME = "lmstudio-ep";
+const LMSTUDIO_REFRESH_COMMAND = "lmstudio-refresh";
 const DEFAULT_CONTEXT_WINDOW = 8192;
 const DEFAULT_MAX_TOKENS = 4096;
 const MODEL_FILE_EXTENSION_PATTERN = /\.(gguf|bin|pt|safetensors)$/i;
@@ -70,26 +72,21 @@ export interface LMStudioProviderModel {
 export function normalizeModelName(id: string): string {
   let name = id.trim();
 
-  if (name.includes('/')) {
-    name = name.split('/').pop() ?? name;
+  if (name.includes("/")) {
+    name = name.split("/").pop() ?? name;
   }
 
-  name = name.replace(/@/g, ' ');
-  name = name.replace(MODEL_FILE_EXTENSION_PATTERN, '');
+  name = name.replace(/@/g, " ");
+  name = name.replace(MODEL_FILE_EXTENSION_PATTERN, "");
 
-  name = name
-    .replace(/[-_]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  name = name.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
 
-  name = name
-    .replace(/\b(\d)\s+(\d)\b/g, '$1.$2')
-    .replace(/([a-z]{2,})(\d+)/gi, '$1 $2');
+  name = name.replace(/\b(\d)\s+(\d)\b/g, "$1.$2").replace(/([a-z]{2,})(\d+)/gi, "$1 $2");
 
   return name
-    .split(' ')
+    .split(" ")
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
+    .join(" ");
 }
 
 /**
@@ -125,23 +122,21 @@ export function inferContextWindow(modelId: string): number {
     return DEFAULT_CONTEXT_WINDOW;
   }
 
-  const multiplier = unit.toLowerCase() === 'm' ? 1000000 : 1000;
+  const multiplier = unit.toLowerCase() === "m" ? 1000000 : 1000;
   return Number(value) * multiplier;
 }
 
 /**
  * Filter invalid or duplicate models before registration.
  */
-export function sanitizeLMStudioModels(
-  lmStudioModels: LMStudioModel[],
-): LMStudioModel[] {
+export function sanitizeLMStudioModels(lmStudioModels: LMStudioModel[]): LMStudioModel[] {
   const seenIds = new Set<string>();
 
   return lmStudioModels.flatMap((model) => {
     const id = model.id.trim();
 
     if (id.length === 0) {
-      console.warn('[lmstudio-models] Skipping model without an ID');
+      console.warn("[lmstudio-models] Skipping model without an ID");
       return [];
     }
 
@@ -158,9 +153,7 @@ export function sanitizeLMStudioModels(
 /**
  * Convert LM Studio models to pi provider model format.
  */
-export function convertToProviderModels(
-  lmStudioModels: LMStudioModel[],
-): LMStudioProviderModel[] {
+export function convertToProviderModels(lmStudioModels: LMStudioModel[]): LMStudioProviderModel[] {
   return sanitizeLMStudioModels(lmStudioModels).map((model) => {
     const { reasoning, multimodal } = inferModelCapabilities(model.id);
     return {
@@ -188,7 +181,7 @@ export async function fetchLMStudioModels(): Promise<LMStudioModel[]> {
     const data = (await response.json()) as LMStudioModelsResponse;
 
     if (!Array.isArray(data.data)) {
-      throw new Error('Invalid response format: expected data.data array');
+      throw new Error("Invalid response format: expected data.data array");
     }
 
     console.log(`[lmstudio-models] Received ${data.data.length} models from LM Studio`);
@@ -196,9 +189,7 @@ export async function fetchLMStudioModels(): Promise<LMStudioModel[]> {
 
     return data.data;
   } catch (error) {
-    console.warn(
-      `[lmstudio-models] Failed to fetch models from LM Studio EP: ${error}`,
-    );
+    console.warn(`[lmstudio-models] Failed to fetch models from LM Studio EP: ${error}`);
     return [];
   }
 }
@@ -208,27 +199,25 @@ export function registerLMStudioProvider(
   providerModels: LMStudioProviderModel[],
 ): number {
   if (providerModels.length === 0) {
-    console.warn('[lmstudio-models] No valid models found to register');
+    console.warn("[lmstudio-models] No valid models found to register");
     return 0;
   }
 
   console.log(`[lmstudio-models] Converting ${providerModels.length} models for pi:`);
   providerModels.forEach((m) => {
-    console.log(
-      `  - ${m.name} (${m.id}): reasoning=${m.reasoning}, multimodal=${m.multimodal}`,
-    );
+    console.log(`  - ${m.name} (${m.id}): reasoning=${m.reasoning}, multimodal=${m.multimodal}`);
   });
 
   pi.registerProvider(LMSTUDIO_PROVIDER_NAME, {
     baseUrl: LMSTUDIO_EP_BASE_URL,
-    apiKey: 'LMSTUDIO_API_KEY',
+    apiKey: "LMSTUDIO_API_KEY",
     authHeader: true,
-    api: 'openai-completions',
+    api: "openai-completions",
     models: providerModels.map((m) => ({
       id: m.id,
       name: m.name,
       reasoning: m.reasoning,
-      input: m.multimodal ? ['text', 'image'] : ['text'],
+      input: m.multimodal ? ["text", "image"] : ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: inferContextWindow(m.id),
       maxTokens: DEFAULT_MAX_TOKENS,
@@ -247,27 +236,27 @@ export function registerLMStudioProvider(
 // =============================================================================
 
 export default function registerLMStudioExtension(pi: ExtensionAPI) {
-  pi.on('session_start', async (_event, _ctx) => {
+  pi.on("session_start", async (_event, _ctx) => {
     const providerModels = convertToProviderModels(await fetchLMStudioModels());
     registerLMStudioProvider(pi, providerModels);
   });
 
   pi.registerCommand(LMSTUDIO_REFRESH_COMMAND, {
-    description: 'Refresh LM Studio models from EP /v1/models',
+    description: "Refresh LM Studio models from EP /v1/models",
     handler: async (_args, ctx) => {
-      ctx.ui.notify('Fetching LM Studio models...', 'info');
+      ctx.ui.notify("Fetching LM Studio models...", "info");
 
       const providerModels = convertToProviderModels(await fetchLMStudioModels());
 
       if (providerModels.length === 0) {
-        ctx.ui.notify('No valid models found or LM Studio is not running', 'error');
+        ctx.ui.notify("No valid models found or LM Studio is not running", "error");
         return;
       }
 
       pi.unregisterProvider(LMSTUDIO_PROVIDER_NAME);
       const registeredCount = registerLMStudioProvider(pi, providerModels);
 
-      ctx.ui.notify(`Updated ${registeredCount} LM Studio model(s)`, 'info');
+      ctx.ui.notify(`Updated ${registeredCount} LM Studio model(s)`, "info");
     },
   });
 }

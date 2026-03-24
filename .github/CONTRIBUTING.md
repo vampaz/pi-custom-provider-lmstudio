@@ -1,42 +1,62 @@
-# Contributing
+# Contributing to pi-lmstudio-models
 
-Thanks for your interest in contributing! This document describes how to contribute to this pi extension.
+Thank you for your interest in contributing to pi-lmstudio-models! This document provides guidelines and instructions for contributing.
 
 ## Development Setup
 
-1. Clone the repository
-2. Run `npm install` in the project root (if needed)
-3. Link or copy to pi's extensions directory:
-   ```bash
-   # Option 1: Copy (for testing)
-   cp -r ~/works/pi-lmstudio-models ~/.pi/agent/extensions/lmstudio-models
-
-   # Option 2: Symlink (for development)
-   ln -sf ~/works/pi-lmstudio-models ~/.pi/agent/extensions/lmstudio-models
-   ```
+1. Fork the repository
+2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/pi-lmstudio-models.git`
+3. Install dependencies: `npm install`
 
 ## Development Workflow
 
-1. Make the smallest set of source, test, and documentation changes needed
-2. Test with:
-   ```bash
-   pi -e ~/works/pi-lmstudio-models
-   ```
-3. Run `npm run lint`, `npm run typecheck`, and `npm test`
-4. Open a PR when the checks are green
+Before creating a pull request:
 
-## Pull Request Process
+1. Run tests: `npm test`
+2. Run linting: `npm run lint`
+3. Check formatting: `npm run format`
 
-1. Update the README.md if needed
-2. The PR will be reviewed and merged by maintainers
-3. Include a clear description of the changes
+All checks must pass before submitting a PR.
+
+## Making Changes
+
+1. Create a branch from `master`: `git checkout -b feature/your-feature-name`
+2. Make your changes
+3. Add tests if applicable
+4. Run all checks: `npm run lint && npm run typecheck && npm test`
+5. Commit your changes with a descriptive message
+6. Push to your fork and open a PR
+
+## Types of Contributions
+
+### Bug Fixes
+
+- Open an issue first to discuss the fix
+- Include a test that reproduces the bug
+
+### New Features
+
+- Open an issue to discuss the feature before implementing
+- Follow existing code patterns and conventions
+
+### Documentation
+
+- Improved README.md or other docs are always welcome
+- Clarifications and examples help all users
 
 ## Code Style
 
-- Follow TypeScript best practices
-- Use consistent indentation (2 spaces)
-- Prefer small, testable helpers over inline branching
+- Use TypeScript for all code
+- Follow existing patterns in the codebase
+- Add JSDoc comments for public functions
+- Write meaningful commit messages
+
+## Testing
+
+- All tests must pass before merging
+- Tests are located in `src/`
+- New features should include corresponding tests
 
 ## Questions?
 
-Open an issue or reach out to the maintainers.
+Open an issue for any questions about contributing!
