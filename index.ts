@@ -209,7 +209,7 @@ export function registerLMStudioProvider(
   });
 
   pi.registerProvider(LMSTUDIO_PROVIDER_NAME, {
-    baseUrl: LMSTUDIO_EP_BASE_URL,
+    baseUrl: `${LMSTUDIO_EP_BASE_URL}/v1`,
     apiKey: "LMSTUDIO_API_KEY",
     authHeader: true,
     api: "openai-completions",

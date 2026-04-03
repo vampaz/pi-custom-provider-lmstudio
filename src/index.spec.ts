@@ -232,7 +232,7 @@ describe("registerLMStudioProvider", () => {
 
     expect(registeredCount).toBe(1);
     expect(runtime.registerProvider).toHaveBeenCalledWith("lmstudio-ep", {
-      baseUrl: LMSTUDIO_EP_BASE_URL,
+      baseUrl: `${LMSTUDIO_EP_BASE_URL}/v1`,
       apiKey: "LMSTUDIO_API_KEY",
       authHeader: true,
       api: "openai-completions",
