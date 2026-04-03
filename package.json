@@ -1,6 +1,6 @@
 {
   "name": "@pi-extensions/lmstudio-models",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Automatically fetch and register LM Studio models from EP /v1/models on startup",
   "keywords": [
     "lm-studio",
