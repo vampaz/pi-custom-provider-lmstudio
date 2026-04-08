@@ -1,7 +1,7 @@
 /**
  * LM Studio Models Extension
  *
- * Fetches available models from LM Studio's EP /v1/models endpoint on startup
+ * Fetches available models from LM Studio's REST API /api/v0/models endpoint on startup
  * and dynamically registers them as available providers.
  */
 
@@ -14,7 +14,8 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 const DEFAULT_LMSTUDIO_EP_BASE_URL = "http://localhost:1234";
 export const LMSTUDIO_EP_BASE_URL =
   process.env.LMSTUDIO_ENDPOINT_URL || DEFAULT_LMSTUDIO_EP_BASE_URL;
-const LMSTUDIO_MODELS_ENDPOINT = `${LMSTUDIO_EP_BASE_URL}/v1/models`;
+const LMSTUDIO_MODELS_ENDPOINT = `${LMSTUDIO_EP_BASE_URL}/api/v0/models`;
+const LMSTUDIO_PROVIDER_BASE_URL = `${LMSTUDIO_EP_BASE_URL}/v1`;
 const LMSTUDIO_PROVIDER_NAME = "lmstudio-ep";
 const LMSTUDIO_REFRESH_COMMAND = "lmstudio-refresh";
 const DEFAULT_CONTEXT_WINDOW = 8192;
@@ -47,7 +48,10 @@ const MULTIMODAL_PATTERNS = [
 export interface LMStudioModel {
   id: string;
   object: string;
-  owned_by: string;
+  owned_by?: string;
+  type?: string;
+  max_context_length?: number;
+  loaded_context_length?: number;
 }
 
 interface LMStudioModelsResponse {
@@ -60,6 +64,7 @@ export interface LMStudioProviderModel {
   name: string;
   reasoning: boolean;
   multimodal: boolean;
+  contextWindow: number;
 }
 
 // =============================================================================
@@ -92,12 +97,15 @@ export function normalizeModelName(id: string): string {
 /**
  * Determine model capabilities based on ID
  */
-export function inferModelCapabilities(modelId: string): {
+export function inferModelCapabilities(model: LMStudioModel | string): {
   reasoning: boolean;
   multimodal: boolean;
 } {
+  const modelId = typeof model === "string" ? model : model.id;
   const hasReasoning = REASONING_PATTERNS.some((pattern) => pattern.test(modelId));
-  const isMultimodal = MULTIMODAL_PATTERNS.some((pattern) => pattern.test(modelId));
+  const isMultimodal =
+    (typeof model !== "string" && model.type === "vlm") ||
+    MULTIMODAL_PATTERNS.some((pattern) => pattern.test(modelId));
 
   return {
     reasoning: hasReasoning,
@@ -106,9 +114,20 @@ export function inferModelCapabilities(modelId: string): {
 }
 
 /**
- * Infer a model's context window from explicit hints in the model ID.
+ * Infer a model's context window from LM Studio metadata, falling back to ID hints.
  */
-export function inferContextWindow(modelId: string): number {
+export function inferContextWindow(model: LMStudioModel | string): number {
+  if (typeof model !== "string") {
+    if (typeof model.loaded_context_length === "number") {
+      return model.loaded_context_length;
+    }
+
+    if (typeof model.max_context_length === "number") {
+      return model.max_context_length;
+    }
+  }
+
+  const modelId = typeof model === "string" ? model : model.id;
   const match = modelId.match(CONTEXT_WINDOW_PATTERN);
 
   if (!match) {
@@ -154,13 +173,18 @@ export function sanitizeLMStudioModels(lmStudioModels: LMStudioModel[]): LMStudi
  * Convert LM Studio models to pi provider model format.
  */
 export function convertToProviderModels(lmStudioModels: LMStudioModel[]): LMStudioProviderModel[] {
-  return sanitizeLMStudioModels(lmStudioModels).map((model) => {
-    const { reasoning, multimodal } = inferModelCapabilities(model.id);
+  return sanitizeLMStudioModels(lmStudioModels).flatMap((model) => {
+    if (model.type === "embeddings") {
+      return [];
+    }
+
+    const { reasoning, multimodal } = inferModelCapabilities(model);
     return {
       id: model.id,
       name: normalizeModelName(model.id),
       reasoning,
       multimodal,
+      contextWindow: inferContextWindow(model),
     };
   });
 }
@@ -209,7 +233,7 @@ export function registerLMStudioProvider(
   });
 
   pi.registerProvider(LMSTUDIO_PROVIDER_NAME, {
-    baseUrl: `${LMSTUDIO_EP_BASE_URL}/v1`,
+    baseUrl: LMSTUDIO_PROVIDER_BASE_URL,
     apiKey: "LMSTUDIO_API_KEY",
     authHeader: true,
     api: "openai-completions",
@@ -219,7 +243,7 @@ export function registerLMStudioProvider(
       reasoning: m.reasoning,
       input: m.multimodal ? ["text", "image"] : ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: inferContextWindow(m.id),
+      contextWindow: m.contextWindow,
       maxTokens: DEFAULT_MAX_TOKENS,
     })),
   });
@@ -242,7 +266,7 @@ export default function registerLMStudioExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand(LMSTUDIO_REFRESH_COMMAND, {
-    description: "Refresh LM Studio models from EP /v1/models",
+    description: "Refresh LM Studio models from REST API /api/v0/models",
     handler: async (_args, ctx) => {
       ctx.ui.notify("Fetching LM Studio models...", "info");
 
