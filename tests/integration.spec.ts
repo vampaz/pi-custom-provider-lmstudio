@@ -8,20 +8,20 @@
  *   npm run test:integration
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from "vitest";
 
-describe('Integration: Real LM Studio Endpoint', () => {
-  const TEST_ENDPOINT_URL = process.env.LMSTUDIO_ENDPOINT_URL || 'http://localhost:1234';
+describe("Integration: Real LM Studio Endpoint", () => {
+  const TEST_ENDPOINT_URL = process.env.LMSTUDIO_ENDPOINT_URL || "http://localhost:1234";
   const TEST_MODELS_ENDPOINT = `${TEST_ENDPOINT_URL}/api/v0/models`;
 
-  it('should be able to connect to LM Studio endpoint', async () => {
+  it("should be able to connect to LM Studio endpoint", async () => {
     const response = await fetch(TEST_ENDPOINT_URL);
 
     // LM Studio EP may return 404 for root, that's OK
     expect(response.ok || response.status === 404).toBe(true);
   }, 10000);
 
-  it('should fetch a list payload from /api/v0/models', async () => {
+  it("should fetch a list payload from /api/v0/models", async () => {
     const response = await fetch(TEST_MODELS_ENDPOINT);
     expect(response.ok).toBe(true);
 
@@ -36,11 +36,11 @@ describe('Integration: Real LM Studio Endpoint', () => {
       }>;
     };
 
-    expect(data.object).toBe('list');
+    expect(data.object).toBe("list");
     expect(Array.isArray(data.data)).toBe(true);
   }, 10000);
 
-  it('should return models with max context metadata when present', async () => {
+  it("should return models with max context metadata when present", async () => {
     const response = await fetch(TEST_MODELS_ENDPOINT);
     expect(response.ok).toBe(true);
 
@@ -55,17 +55,17 @@ describe('Integration: Real LM Studio Endpoint', () => {
       }>;
     };
 
-    expect(data.object).toBe('list');
+    expect(data.object).toBe("list");
 
     if (data.data.length > 0) {
       const model = data.data[0];
-      expect(typeof model.id).toBe('string');
+      expect(typeof model.id).toBe("string");
       expect(model.id.length).toBeGreaterThan(0);
-      expect(typeof model.object).toBe('string');
-      expect(typeof model.max_context_length).toBe('number');
+      expect(typeof model.object).toBe("string");
+      expect(typeof model.max_context_length).toBe("number");
 
-      if (typeof model.loaded_context_length !== 'undefined') {
-        expect(typeof model.loaded_context_length).toBe('number');
+      if (typeof model.loaded_context_length !== "undefined") {
+        expect(typeof model.loaded_context_length).toBe("number");
       }
     }
   }, 10000);
