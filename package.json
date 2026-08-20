@@ -1,12 +1,21 @@
 {
   "name": "@pi-extensions/lmstudio-models",
-  "version": "1.0.1",
-  "description": "Automatically fetch and register LM Studio models from EP /v1/models on startup",
+  "version": "2.0.0",
+  "description": "Automatically fetch and register logical models from LM Studio REST API v1 on startup",
   "keywords": [
     "lm-studio",
     "model-sync",
     "pi-package"
   ],
+  "homepage": "https://github.com/vampaz/pi-custom-provider-lmstudio#readme",
+  "bugs": {
+    "url": "https://github.com/vampaz/pi-custom-provider-lmstudio/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vampaz/pi-custom-provider-lmstudio.git"
+  },
   "files": [
     "index.ts"
   ],
@@ -21,15 +30,15 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "devDependencies": {
-    "@mariozechner/pi-coding-agent": "^0.62.0",
-    "@types/node": "^25.5.0",
-    "oxfmt": "^0.41.0",
-    "oxlint": "^1.56.0",
-    "typescript": "^6.0.2",
-    "vitest": "^4.1.1"
+    "@earendil-works/pi-coding-agent": "^0.84.2",
+    "@types/node": "^26.2.0",
+    "oxfmt": "^0.64.0",
+    "oxlint": "^1.79.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*"
   },
   "engines": {
     "node": ">=20"

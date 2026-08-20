@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import registerLMStudioExtension, {
@@ -23,7 +23,6 @@ interface MockExtensionRuntime {
   registerProvider: ReturnType<typeof vi.fn>;
   unregisterProvider: ReturnType<typeof vi.fn>;
   runRefresh: (ctx?: MockCommandContext) => Promise<MockCommandContext>;
-  runSessionStart: () => Promise<void>;
 }
 
 function createMockCommandContext(): MockCommandContext {
@@ -35,18 +34,12 @@ function createMockCommandContext(): MockCommandContext {
 }
 
 function createMockExtensionRuntime(): MockExtensionRuntime {
-  let sessionStartHandler: ((event: unknown, ctx: unknown) => Promise<void> | void) | undefined;
   let refreshHandler: ((args: string[], ctx: MockCommandContext) => Promise<void>) | undefined;
 
   const registerProvider = vi.fn();
   const unregisterProvider = vi.fn();
 
   const pi = {
-    on: vi.fn((event: string, handler: (event: unknown, ctx: unknown) => Promise<void> | void) => {
-      if (event === "session_start") {
-        sessionStartHandler = handler;
-      }
-    }),
     registerCommand: vi.fn(
       (
         name: string,
@@ -72,13 +65,6 @@ function createMockExtensionRuntime(): MockExtensionRuntime {
 
       await refreshHandler([], ctx);
       return ctx;
-    },
-    async runSessionStart() {
-      if (!sessionStartHandler) {
-        throw new Error("Session start handler was not registered");
-      }
-
-      await sessionStartHandler({}, {});
     },
   };
 }
@@ -117,14 +103,17 @@ describe("inferModelCapabilities", () => {
     expect(inferModelCapabilities("gemini-2-flash").reasoning).toBe(false);
   });
 
-  it("detects multimodal models from LM Studio model types before falling back to ID markers", () => {
+  it("uses LM Studio capabilities before falling back to model ID markers", () => {
     expect(
       inferModelCapabilities({
-        id: "gemma-4-26b-a4b",
-        object: "model",
-        type: "vlm",
-      }).multimodal,
-    ).toBe(true);
+        key: "google/gemma-4-26b-a4b",
+        type: "llm",
+        capabilities: {
+          vision: true,
+          reasoning: { allowed_options: ["off", "on"] },
+        },
+      }),
+    ).toEqual({ reasoning: true, multimodal: true });
     expect(inferModelCapabilities("qwen2-vl-7b-instruct").multimodal).toBe(true);
     expect(inferModelCapabilities("llava-1.6").multimodal).toBe(true);
     expect(inferModelCapabilities("pixtral-12b").multimodal).toBe(true);
@@ -136,17 +125,17 @@ describe("inferContextWindow", () => {
   it("prefers LM Studio REST metadata when available", () => {
     expect(
       inferContextWindow({
-        id: "google/gemma-4-26b-a4b",
-        object: "model",
+        key: "google/gemma-4-26b-a4b",
+        type: "llm",
         max_context_length: 262144,
       }),
     ).toBe(262144);
     expect(
       inferContextWindow({
-        id: "google/gemma-4-26b-a4b",
-        object: "model",
+        key: "google/gemma-4-26b-a4b",
+        type: "llm",
         max_context_length: 262144,
-        loaded_context_length: 131072,
+        loaded_instances: [{ config: { context_length: 131072 } }],
       }),
     ).toBe(131072);
   });
@@ -164,60 +153,72 @@ describe("inferContextWindow", () => {
 });
 
 describe("sanitizeLMStudioModels", () => {
-  it("filters blank and duplicate model IDs", () => {
+  it("filters blank and duplicate model keys", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const models = sanitizeLMStudioModels([
-      { id: "  qwen/qwen3-coder-next  ", object: "model", owned_by: "lmstudio" },
-      { id: "", object: "model", owned_by: "lmstudio" },
-      { id: "qwen/qwen3-coder-next", object: "model", owned_by: "lmstudio" },
+      { key: "  qwen/qwen3-coder-next  ", type: "llm" },
+      { key: "", type: "llm" },
+      { key: "qwen/qwen3-coder-next", type: "llm" },
     ]);
 
-    expect(models).toEqual([
-      { id: "qwen/qwen3-coder-next", object: "model", owned_by: "lmstudio" },
-    ]);
+    expect(models).toEqual([{ key: "qwen/qwen3-coder-next", type: "llm" }]);
     expect(warnSpy).toHaveBeenCalledTimes(2);
   });
 });
 
 describe("convertToProviderModels", () => {
-  it("maps LM Studio REST models into provider models and skips embeddings", () => {
+  it("maps logical LM Studio models once and skips embeddings", () => {
     expect(
       convertToProviderModels([
         {
-          id: "qwen/qwen3-coder-next",
-          object: "model",
-          owned_by: "lmstudio",
+          key: "qwen3.8-27b-uncensored-mlx",
           type: "llm",
-          max_context_length: 65536,
-        },
-        {
-          id: "gemma-4-26b-a4b",
-          object: "model",
-          owned_by: "lmstudio",
-          type: "vlm",
+          display_name: "Qwen3.8 27B Uncensored",
           max_context_length: 262144,
+          capabilities: { vision: true },
         },
         {
-          id: "text-embedding-nomic-embed-text-v1.5",
-          object: "model",
-          owned_by: "lmstudio",
-          type: "embeddings",
+          key: "qwen/qwen3.8-27b",
+          type: "llm",
+          display_name: "Qwen3.8 27B",
+          max_context_length: 262144,
+          variants: ["qwen/qwen3.8-27b@6bit", "qwen/qwen3.8-27b@8bit"],
+          selected_variant: "qwen/qwen3.8-27b@6bit",
+          capabilities: { vision: true },
+        },
+        {
+          key: "google/gemma-4-26b-a4b",
+          type: "llm",
+          display_name: "Gemma 4 26B A4B",
+          max_context_length: 262144,
+          capabilities: { vision: true, reasoning: { allowed_options: ["off", "on"] } },
+        },
+        {
+          key: "text-embedding-nomic-embed-text-v1.5",
+          type: "embedding",
           max_context_length: 2048,
         },
       ]),
     ).toEqual([
       {
-        id: "qwen/qwen3-coder-next",
-        name: "Qwen 3 Coder Next",
+        id: "qwen3.8-27b-uncensored-mlx",
+        name: "qwen3.8-27b-uncensored-mlx",
         reasoning: false,
-        multimodal: false,
-        contextWindow: 65536,
+        multimodal: true,
+        contextWindow: 262144,
       },
       {
-        id: "gemma-4-26b-a4b",
-        name: "Gemma 4 26b A4b",
+        id: "qwen/qwen3.8-27b",
+        name: "qwen/qwen3.8-27b",
         reasoning: false,
+        multimodal: true,
+        contextWindow: 262144,
+      },
+      {
+        id: "google/gemma-4-26b-a4b",
+        name: "google/gemma-4-26b-a4b",
+        reasoning: true,
         multimodal: true,
         contextWindow: 262144,
       },
@@ -227,7 +228,7 @@ describe("convertToProviderModels", () => {
 
 describe("fetchLMStudioModels", () => {
   beforeEach(() => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
@@ -241,12 +242,9 @@ describe("fetchLMStudioModels", () => {
       "fetch",
       vi.fn().mockResolvedValue(
         createResponse({
-          object: "list",
-          data: [
+          models: [
             {
-              id: "qwen/qwen3-coder-next",
-              object: "model",
-              owned_by: "lmstudio",
+              key: "qwen/qwen3-coder-next",
               type: "llm",
               max_context_length: 65536,
             },
@@ -257,20 +255,38 @@ describe("fetchLMStudioModels", () => {
 
     await expect(fetchLMStudioModels()).resolves.toEqual([
       {
-        id: "qwen/qwen3-coder-next",
-        object: "model",
-        owned_by: "lmstudio",
+        key: "qwen/qwen3-coder-next",
         type: "llm",
         max_context_length: 65536,
       },
     ]);
   });
 
-  it("returns an empty list when the response body is invalid", async () => {
+  it("returns logical models from the v1 model inventory", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(createResponse({ object: "list", data: null })),
+      vi.fn().mockResolvedValue(
+        createResponse({
+          models: [
+            {
+              type: "llm",
+              key: "qwen/qwen3.8-27b",
+              display_name: "Qwen3.8 27B",
+              max_context_length: 262144,
+              variants: ["qwen/qwen3.8-27b@6bit", "qwen/qwen3.8-27b@8bit"],
+              selected_variant: "qwen/qwen3.8-27b@6bit",
+              capabilities: { vision: true },
+            },
+          ],
+        }),
+      ),
     );
+
+    await expect(fetchLMStudioModels()).resolves.toHaveLength(1);
+  });
+
+  it("returns an empty list when the response body is invalid", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(createResponse({ models: null })));
 
     await expect(fetchLMStudioModels()).resolves.toEqual([]);
     expect(console.warn).toHaveBeenCalledOnce();
@@ -294,7 +310,7 @@ describe("registerLMStudioProvider", () => {
     expect(registeredCount).toBe(1);
     expect(runtime.registerProvider).toHaveBeenCalledWith("lmstudio-ep", {
       baseUrl: `${LMSTUDIO_EP_BASE_URL}/v1`,
-      apiKey: "LMSTUDIO_API_KEY",
+      apiKey: process.env.LMSTUDIO_API_KEY ?? "lm-studio",
       authHeader: true,
       api: "openai-completions",
       models: [
@@ -314,7 +330,7 @@ describe("registerLMStudioProvider", () => {
 
 describe("registerLMStudioExtension", () => {
   beforeEach(() => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
@@ -323,19 +339,17 @@ describe("registerLMStudioExtension", () => {
     vi.unstubAllGlobals();
   });
 
-  it("registers models on session start", async () => {
+  it("registers models during extension initialization", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
         createResponse({
-          object: "list",
-          data: [
+          models: [
             {
-              id: "qwen/qwen2-vl-7b-32k",
-              object: "model",
-              owned_by: "lmstudio",
-              type: "vlm",
+              key: "qwen/qwen2-vl-7b-32k",
+              type: "llm",
               max_context_length: 32768,
+              capabilities: { vision: true },
             },
           ],
         }),
@@ -343,9 +357,7 @@ describe("registerLMStudioExtension", () => {
     );
 
     const runtime = createMockExtensionRuntime();
-    registerLMStudioExtension(runtime.pi);
-
-    await runtime.runSessionStart();
+    await registerLMStudioExtension(runtime.pi);
 
     expect(runtime.registerProvider).toHaveBeenCalledOnce();
   });
@@ -353,24 +365,23 @@ describe("registerLMStudioExtension", () => {
   it("refreshes the provider only when valid models are available", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        createResponse({
-          object: "list",
-          data: [
-            {
-              id: "qwen/qwen3-coder-next",
-              object: "model",
-              owned_by: "lmstudio",
-              type: "llm",
-              max_context_length: 65536,
-            },
-          ],
-        }),
+      vi.fn().mockImplementation(() =>
+        Promise.resolve(
+          createResponse({
+            models: [
+              {
+                key: "qwen/qwen3-coder-next",
+                type: "llm",
+                max_context_length: 65536,
+              },
+            ],
+          }),
+        ),
       ),
     );
 
     const runtime = createMockExtensionRuntime();
-    registerLMStudioExtension(runtime.pi);
+    await registerLMStudioExtension(runtime.pi);
 
     const ctx = await runtime.runRefresh();
 
@@ -382,24 +393,23 @@ describe("registerLMStudioExtension", () => {
   it("keeps the existing provider when refresh finds no valid models", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        createResponse({
-          object: "list",
-          data: [
-            {
-              id: "text-embedding-nomic-embed-text-v1.5",
-              object: "model",
-              owned_by: "lmstudio",
-              type: "embeddings",
-              max_context_length: 2048,
-            },
-          ],
-        }),
+      vi.fn().mockImplementation(() =>
+        Promise.resolve(
+          createResponse({
+            models: [
+              {
+                key: "text-embedding-nomic-embed-text-v1.5",
+                type: "embedding",
+                max_context_length: 2048,
+              },
+            ],
+          }),
+        ),
       ),
     );
 
     const runtime = createMockExtensionRuntime();
-    registerLMStudioExtension(runtime.pi);
+    await registerLMStudioExtension(runtime.pi);
 
     const ctx = await runtime.runRefresh();
 

@@ -1,11 +1,11 @@
 /**
  * LM Studio Models Extension
  *
- * Fetches available models from LM Studio's REST API /api/v0/models endpoint on startup
+ * Fetches available models from LM Studio's REST API /api/v1/models endpoint on startup
  * and dynamically registers them as available providers.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // =============================================================================
 // Constants
@@ -14,8 +14,9 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 const DEFAULT_LMSTUDIO_EP_BASE_URL = "http://localhost:1234";
 export const LMSTUDIO_EP_BASE_URL =
   process.env.LMSTUDIO_ENDPOINT_URL || DEFAULT_LMSTUDIO_EP_BASE_URL;
-const LMSTUDIO_MODELS_ENDPOINT = `${LMSTUDIO_EP_BASE_URL}/api/v0/models`;
+const LMSTUDIO_MODELS_ENDPOINT = `${LMSTUDIO_EP_BASE_URL}/api/v1/models`;
 const LMSTUDIO_PROVIDER_BASE_URL = `${LMSTUDIO_EP_BASE_URL}/v1`;
+const LMSTUDIO_API_KEY = process.env.LMSTUDIO_API_KEY;
 const LMSTUDIO_PROVIDER_NAME = "lmstudio-ep";
 const LMSTUDIO_REFRESH_COMMAND = "lmstudio-refresh";
 const DEFAULT_CONTEXT_WINDOW = 8192;
@@ -46,17 +47,25 @@ const MULTIMODAL_PATTERNS = [
 // =============================================================================
 
 export interface LMStudioModel {
-  id: string;
-  object: string;
-  owned_by?: string;
-  type?: string;
+  key: string;
+  type: string;
+  display_name?: string;
   max_context_length?: number;
-  loaded_context_length?: number;
+  loaded_instances?: Array<{
+    config?: {
+      context_length?: number;
+    };
+  }>;
+  capabilities?: {
+    vision?: boolean;
+    reasoning?: unknown;
+  };
+  variants?: string[];
+  selected_variant?: string;
 }
 
 interface LMStudioModelsResponse {
-  object: string;
-  data: LMStudioModel[];
+  models: LMStudioModel[];
 }
 
 export interface LMStudioProviderModel {
@@ -95,17 +104,23 @@ export function normalizeModelName(id: string): string {
 }
 
 /**
- * Determine model capabilities based on ID
+ * Determine model capabilities from LM Studio metadata or model-key hints
  */
 export function inferModelCapabilities(model: LMStudioModel | string): {
   reasoning: boolean;
   multimodal: boolean;
 } {
-  const modelId = typeof model === "string" ? model : model.id;
-  const hasReasoning = REASONING_PATTERNS.some((pattern) => pattern.test(modelId));
+  const modelId = typeof model === "string" ? model : model.key;
+  const declaredReasoning = typeof model === "string" ? undefined : model.capabilities?.reasoning;
+  const hasReasoning =
+    declaredReasoning === undefined
+      ? REASONING_PATTERNS.some((pattern) => pattern.test(modelId))
+      : Boolean(declaredReasoning);
   const isMultimodal =
-    (typeof model !== "string" && model.type === "vlm") ||
-    MULTIMODAL_PATTERNS.some((pattern) => pattern.test(modelId));
+    typeof model === "string"
+      ? MULTIMODAL_PATTERNS.some((pattern) => pattern.test(modelId))
+      : (model.capabilities?.vision ??
+        MULTIMODAL_PATTERNS.some((pattern) => pattern.test(modelId)));
 
   return {
     reasoning: hasReasoning,
@@ -114,12 +129,16 @@ export function inferModelCapabilities(model: LMStudioModel | string): {
 }
 
 /**
- * Infer a model's context window from LM Studio metadata, falling back to ID hints.
+ * Infer a model's context window from LM Studio metadata, falling back to key hints.
  */
 export function inferContextWindow(model: LMStudioModel | string): number {
   if (typeof model !== "string") {
-    if (typeof model.loaded_context_length === "number") {
-      return model.loaded_context_length;
+    const loadedContextLength = model.loaded_instances?.find(
+      (instance) => typeof instance.config?.context_length === "number",
+    )?.config?.context_length;
+
+    if (typeof loadedContextLength === "number") {
+      return loadedContextLength;
     }
 
     if (typeof model.max_context_length === "number") {
@@ -127,7 +146,7 @@ export function inferContextWindow(model: LMStudioModel | string): number {
     }
   }
 
-  const modelId = typeof model === "string" ? model : model.id;
+  const modelId = typeof model === "string" ? model : model.key;
   const match = modelId.match(CONTEXT_WINDOW_PATTERN);
 
   if (!match) {
@@ -149,23 +168,23 @@ export function inferContextWindow(model: LMStudioModel | string): number {
  * Filter invalid or duplicate models before registration.
  */
 export function sanitizeLMStudioModels(lmStudioModels: LMStudioModel[]): LMStudioModel[] {
-  const seenIds = new Set<string>();
+  const seenKeys = new Set<string>();
 
   return lmStudioModels.flatMap((model) => {
-    const id = model.id.trim();
+    const key = model.key.trim();
 
-    if (id.length === 0) {
-      console.warn("[lmstudio-models] Skipping model without an ID");
+    if (key.length === 0) {
+      console.warn("[lmstudio-models] Skipping model without a key");
       return [];
     }
 
-    if (seenIds.has(id)) {
-      console.warn(`[lmstudio-models] Skipping duplicate model '${id}'`);
+    if (seenKeys.has(key)) {
+      console.warn(`[lmstudio-models] Skipping duplicate model '${key}'`);
       return [];
     }
 
-    seenIds.add(id);
-    return [{ ...model, id }];
+    seenKeys.add(key);
+    return [{ ...model, key }];
   });
 }
 
@@ -174,14 +193,14 @@ export function sanitizeLMStudioModels(lmStudioModels: LMStudioModel[]): LMStudi
  */
 export function convertToProviderModels(lmStudioModels: LMStudioModel[]): LMStudioProviderModel[] {
   return sanitizeLMStudioModels(lmStudioModels).flatMap((model) => {
-    if (model.type === "embeddings") {
+    if (model.type === "embedding") {
       return [];
     }
 
     const { reasoning, multimodal } = inferModelCapabilities(model);
     return {
-      id: model.id,
-      name: normalizeModelName(model.id),
+      id: model.key,
+      name: model.key,
       reasoning,
       multimodal,
       contextWindow: inferContextWindow(model),
@@ -195,8 +214,14 @@ export function convertToProviderModels(lmStudioModels: LMStudioModel[]): LMStud
 
 export async function fetchLMStudioModels(): Promise<LMStudioModel[]> {
   try {
-    console.log(`[lmstudio-models] Fetching models from ${LMSTUDIO_MODELS_ENDPOINT}`);
-    const response = await fetch(LMSTUDIO_MODELS_ENDPOINT);
+    console.error(`[lmstudio-models] Fetching models from ${LMSTUDIO_MODELS_ENDPOINT}`);
+    const response = await fetch(LMSTUDIO_MODELS_ENDPOINT, {
+      headers: LMSTUDIO_API_KEY
+        ? {
+            Authorization: `Bearer ${LMSTUDIO_API_KEY}`,
+          }
+        : undefined,
+    });
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -204,14 +229,14 @@ export async function fetchLMStudioModels(): Promise<LMStudioModel[]> {
 
     const data = (await response.json()) as LMStudioModelsResponse;
 
-    if (!Array.isArray(data.data)) {
-      throw new Error("Invalid response format: expected data.data array");
+    if (!Array.isArray(data.models)) {
+      throw new Error("Invalid response format: expected data.models array");
     }
 
-    console.log(`[lmstudio-models] Received ${data.data.length} models from LM Studio`);
-    data.data.forEach((m) => console.log(`  - ${m.id}`));
+    console.error(`[lmstudio-models] Received ${data.models.length} models from LM Studio`);
+    data.models.forEach((model) => console.error(`  - ${model.key}`));
 
-    return data.data;
+    return data.models;
   } catch (error) {
     console.warn(`[lmstudio-models] Failed to fetch models from LM Studio EP: ${error}`);
     return [];
@@ -227,14 +252,14 @@ export function registerLMStudioProvider(
     return 0;
   }
 
-  console.log(`[lmstudio-models] Converting ${providerModels.length} models for pi:`);
+  console.error(`[lmstudio-models] Converting ${providerModels.length} models for pi:`);
   providerModels.forEach((m) => {
-    console.log(`  - ${m.name} (${m.id}): reasoning=${m.reasoning}, multimodal=${m.multimodal}`);
+    console.error(`  - ${m.name} (${m.id}): reasoning=${m.reasoning}, multimodal=${m.multimodal}`);
   });
 
   pi.registerProvider(LMSTUDIO_PROVIDER_NAME, {
     baseUrl: LMSTUDIO_PROVIDER_BASE_URL,
-    apiKey: "LMSTUDIO_API_KEY",
+    apiKey: LMSTUDIO_API_KEY ?? "lm-studio",
     authHeader: true,
     api: "openai-completions",
     models: providerModels.map((m) => ({
@@ -248,7 +273,7 @@ export function registerLMStudioProvider(
     })),
   });
 
-  console.log(
+  console.error(
     `[lmstudio-models] Registered provider '${LMSTUDIO_PROVIDER_NAME}' with ${providerModels.length} models`,
   );
 
@@ -259,14 +284,9 @@ export function registerLMStudioProvider(
 // Extension Entry Point
 // =============================================================================
 
-export default function registerLMStudioExtension(pi: ExtensionAPI) {
-  pi.on("session_start", async (_event, _ctx) => {
-    const providerModels = convertToProviderModels(await fetchLMStudioModels());
-    registerLMStudioProvider(pi, providerModels);
-  });
-
+export default async function registerLMStudioExtension(pi: ExtensionAPI) {
   pi.registerCommand(LMSTUDIO_REFRESH_COMMAND, {
-    description: "Refresh LM Studio models from REST API /api/v0/models",
+    description: "Refresh LM Studio models from REST API /api/v1/models",
     handler: async (_args, ctx) => {
       ctx.ui.notify("Fetching LM Studio models...", "info");
 
@@ -283,4 +303,7 @@ export default function registerLMStudioExtension(pi: ExtensionAPI) {
       ctx.ui.notify(`Updated ${registeredCount} LM Studio model(s)`, "info");
     },
   });
+
+  const providerModels = convertToProviderModels(await fetchLMStudioModels());
+  registerLMStudioProvider(pi, providerModels);
 }
