@@ -1,16 +1,22 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import registerLMStudioExtension, {
-  LMSTUDIO_EP_BASE_URL,
   convertToProviderModels,
   fetchLMStudioModels,
   inferContextWindow,
   inferModelCapabilities,
+  loadLMStudioEndpoints,
   normalizeModelName,
+  parseLMStudioEndpoints,
   registerLMStudioProvider,
   sanitizeLMStudioModels,
 } from "../index";
+
+const TEST_ENDPOINTS = [{ provider: "lmstudio-ep", baseUrl: "http://localhost:1234" }];
 
 interface MockCommandContext {
   ui: {
@@ -78,6 +84,57 @@ function createResponse(body: unknown, init?: ResponseInit): Response {
     ...init,
   });
 }
+
+describe("parseLMStudioEndpoints", () => {
+  it("parses multiple named endpoints", () => {
+    expect(
+      parseLMStudioEndpoints([
+        { provider: "lmstudio-local", baseUrl: "http://localhost:1234/" },
+        {
+          provider: "lmstudio-lan",
+          baseUrl: "http://192.168.1.50:1234",
+          apiKey: "secret",
+        },
+      ]),
+    ).toEqual([
+      { provider: "lmstudio-local", baseUrl: "http://localhost:1234" },
+      {
+        provider: "lmstudio-lan",
+        baseUrl: "http://192.168.1.50:1234",
+        apiKey: "secret",
+      },
+    ]);
+  });
+
+  it("rejects duplicate providers", () => {
+    expect(() =>
+      parseLMStudioEndpoints([
+        { provider: "lmstudio", baseUrl: "http://localhost:1234" },
+        { provider: "lmstudio", baseUrl: "http://192.168.1.50:1234" },
+      ]),
+    ).toThrow("provider 'lmstudio' is configured more than once");
+  });
+});
+
+describe("loadLMStudioEndpoints", () => {
+  it("falls back to the local default when the config file is missing", async () => {
+    await expect(loadLMStudioEndpoints("/nonexistent/lmstudio-models.json")).resolves.toEqual([
+      { provider: "lmstudio-ep", baseUrl: "http://localhost:1234" },
+    ]);
+  });
+
+  it("rejects invalid config files with the config path in the message", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "lmstudio-models-"));
+    const configPath = join(directory, "lmstudio-models.json");
+    await writeFile(configPath, JSON.stringify({ provider: "lmstudio-ep" }));
+
+    await expect(loadLMStudioEndpoints(configPath)).rejects.toThrow(
+      `Invalid LM Studio config at ${configPath}`,
+    );
+
+    await rm(directory, { recursive: true });
+  });
+});
 
 describe("normalizeModelName", () => {
   it.each([
@@ -309,8 +366,8 @@ describe("registerLMStudioProvider", () => {
 
     expect(registeredCount).toBe(1);
     expect(runtime.registerProvider).toHaveBeenCalledWith("lmstudio-ep", {
-      baseUrl: `${LMSTUDIO_EP_BASE_URL}/v1`,
-      apiKey: process.env.LMSTUDIO_API_KEY ?? "lm-studio",
+      baseUrl: "http://localhost:1234/v1",
+      apiKey: "lm-studio",
       authHeader: true,
       api: "openai-completions",
       models: [
@@ -357,9 +414,57 @@ describe("registerLMStudioExtension", () => {
     );
 
     const runtime = createMockExtensionRuntime();
-    await registerLMStudioExtension(runtime.pi);
+    await registerLMStudioExtension(runtime.pi, TEST_ENDPOINTS);
 
     expect(runtime.registerProvider).toHaveBeenCalledOnce();
+  });
+
+  it("registers each configured endpoint as its own provider", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() =>
+        Promise.resolve(
+          createResponse({
+            models: [
+              {
+                key: "qwen/qwen3-coder-next",
+                type: "llm",
+                max_context_length: 65536,
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+
+    const runtime = createMockExtensionRuntime();
+    await registerLMStudioExtension(runtime.pi, [
+      { provider: "lmstudio-local", baseUrl: "http://localhost:1234" },
+      {
+        provider: "lmstudio-lan",
+        baseUrl: "http://192.168.1.50:1234",
+        apiKey: "secret",
+      },
+    ]);
+
+    expect(fetch).toHaveBeenCalledWith("http://localhost:1234/api/v1/models", {
+      headers: undefined,
+    });
+    expect(fetch).toHaveBeenCalledWith("http://192.168.1.50:1234/api/v1/models", {
+      headers: { Authorization: "Bearer secret" },
+    });
+    expect(runtime.registerProvider).toHaveBeenCalledTimes(2);
+    expect(runtime.registerProvider).toHaveBeenCalledWith(
+      "lmstudio-local",
+      expect.objectContaining({ baseUrl: "http://localhost:1234/v1" }),
+    );
+    expect(runtime.registerProvider).toHaveBeenCalledWith(
+      "lmstudio-lan",
+      expect.objectContaining({
+        baseUrl: "http://192.168.1.50:1234/v1",
+        apiKey: "secret",
+      }),
+    );
   });
 
   it("refreshes the provider only when valid models are available", async () => {
@@ -381,12 +486,16 @@ describe("registerLMStudioExtension", () => {
     );
 
     const runtime = createMockExtensionRuntime();
-    await registerLMStudioExtension(runtime.pi);
+    await registerLMStudioExtension(runtime.pi, TEST_ENDPOINTS);
 
     const ctx = await runtime.runRefresh();
 
     expect(runtime.unregisterProvider).toHaveBeenCalledWith("lmstudio-ep");
-    expect(ctx.ui.notify).toHaveBeenNthCalledWith(1, "Fetching LM Studio models...", "info");
+    expect(ctx.ui.notify).toHaveBeenNthCalledWith(
+      1,
+      "Fetching models from 1 LM Studio endpoint(s)...",
+      "info",
+    );
     expect(ctx.ui.notify).toHaveBeenNthCalledWith(2, "Updated 1 LM Studio model(s)", "info");
   });
 
@@ -409,7 +518,7 @@ describe("registerLMStudioExtension", () => {
     );
 
     const runtime = createMockExtensionRuntime();
-    await registerLMStudioExtension(runtime.pi);
+    await registerLMStudioExtension(runtime.pi, TEST_ENDPOINTS);
 
     const ctx = await runtime.runRefresh();
 
