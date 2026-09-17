@@ -1,23 +1,23 @@
 /**
  * LM Studio Models Extension
  *
- * Fetches available models from LM Studio's REST API /api/v1/models endpoint on startup
- * and dynamically registers them as available providers.
+ * Fetches available models from configured LM Studio REST API endpoints on startup
+ * and dynamically registers each endpoint as an available provider.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 // =============================================================================
 // Constants
 // =============================================================================
 
-const DEFAULT_LMSTUDIO_EP_BASE_URL = "http://localhost:1234";
-export const LMSTUDIO_EP_BASE_URL =
-  process.env.LMSTUDIO_ENDPOINT_URL || DEFAULT_LMSTUDIO_EP_BASE_URL;
-const LMSTUDIO_MODELS_ENDPOINT = `${LMSTUDIO_EP_BASE_URL}/api/v1/models`;
-const LMSTUDIO_PROVIDER_BASE_URL = `${LMSTUDIO_EP_BASE_URL}/v1`;
-const LMSTUDIO_API_KEY = process.env.LMSTUDIO_API_KEY;
-const LMSTUDIO_PROVIDER_NAME = "lmstudio-ep";
+const DEFAULT_LMSTUDIO_ENDPOINT: LMStudioEndpoint = {
+  provider: "lmstudio-ep",
+  baseUrl: "http://localhost:1234",
+};
+export const LMSTUDIO_CONFIG_PATH = join(getAgentDir(), "lmstudio-models.json");
 const LMSTUDIO_REFRESH_COMMAND = "lmstudio-refresh";
 const DEFAULT_CONTEXT_WINDOW = 8192;
 const DEFAULT_MAX_TOKENS = 4096;
@@ -45,6 +45,12 @@ const MULTIMODAL_PATTERNS = [
 // =============================================================================
 // Types
 // =============================================================================
+
+export interface LMStudioEndpoint {
+  provider: string;
+  baseUrl: string;
+  apiKey?: string;
+}
 
 export interface LMStudioModel {
   key: string;
@@ -74,6 +80,74 @@ export interface LMStudioProviderModel {
   reasoning: boolean;
   multimodal: boolean;
   contextWindow: number;
+}
+
+// =============================================================================
+// Configuration
+// =============================================================================
+
+export function parseLMStudioEndpoints(value: unknown): LMStudioEndpoint[] {
+  if (!Array.isArray(value)) {
+    throw new Error("expected an array of endpoints");
+  }
+
+  const providers = new Set<string>();
+
+  return value.map((endpoint, index) => {
+    if (typeof endpoint !== "object" || endpoint === null) {
+      throw new Error(`endpoint ${index + 1} must be an object`);
+    }
+
+    const { provider, baseUrl, apiKey } = endpoint as Record<string, unknown>;
+
+    if (typeof provider !== "string" || !/^[a-z0-9][a-z0-9._-]*$/.test(provider)) {
+      throw new Error(`endpoint ${index + 1} has an invalid provider`);
+    }
+
+    if (providers.has(provider)) {
+      throw new Error(`provider '${provider}' is configured more than once`);
+    }
+
+    if (typeof baseUrl !== "string") {
+      throw new Error(`endpoint ${index + 1} has an invalid baseUrl`);
+    }
+
+    let url: URL;
+    try {
+      url = new URL(baseUrl);
+    } catch {
+      throw new Error(`endpoint ${index + 1} has an invalid baseUrl`);
+    }
+
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new Error(`endpoint ${index + 1} baseUrl must use http or https`);
+    }
+
+    if (apiKey !== undefined && typeof apiKey !== "string") {
+      throw new Error(`endpoint ${index + 1} has an invalid apiKey`);
+    }
+
+    providers.add(provider);
+    return {
+      provider,
+      baseUrl: baseUrl.replace(/\/+$/, ""),
+      ...(apiKey ? { apiKey } : {}),
+    };
+  });
+}
+
+export async function loadLMStudioEndpoints(
+  configPath = LMSTUDIO_CONFIG_PATH,
+): Promise<LMStudioEndpoint[]> {
+  try {
+    return parseLMStudioEndpoints(JSON.parse(await readFile(configPath, "utf8")));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [DEFAULT_LMSTUDIO_ENDPOINT];
+    }
+
+    throw new Error(`Invalid LM Studio config at ${configPath}: ${error}`);
+  }
 }
 
 // =============================================================================
@@ -212,13 +286,17 @@ export function convertToProviderModels(lmStudioModels: LMStudioModel[]): LMStud
 // Provider Registration
 // =============================================================================
 
-export async function fetchLMStudioModels(): Promise<LMStudioModel[]> {
+export async function fetchLMStudioModels(
+  endpoint: LMStudioEndpoint = DEFAULT_LMSTUDIO_ENDPOINT,
+): Promise<LMStudioModel[]> {
+  const modelsUrl = `${endpoint.baseUrl}/api/v1/models`;
+
   try {
-    console.error(`[lmstudio-models] Fetching models from ${LMSTUDIO_MODELS_ENDPOINT}`);
-    const response = await fetch(LMSTUDIO_MODELS_ENDPOINT, {
-      headers: LMSTUDIO_API_KEY
+    console.error(`[lmstudio-models] Fetching models from ${modelsUrl}`);
+    const response = await fetch(modelsUrl, {
+      headers: endpoint.apiKey
         ? {
-            Authorization: `Bearer ${LMSTUDIO_API_KEY}`,
+            Authorization: `Bearer ${endpoint.apiKey}`,
           }
         : undefined,
     });
@@ -233,12 +311,14 @@ export async function fetchLMStudioModels(): Promise<LMStudioModel[]> {
       throw new Error("Invalid response format: expected data.models array");
     }
 
-    console.error(`[lmstudio-models] Received ${data.models.length} models from LM Studio`);
+    console.error(
+      `[lmstudio-models] Received ${data.models.length} models from ${endpoint.provider}`,
+    );
     data.models.forEach((model) => console.error(`  - ${model.key}`));
 
     return data.models;
   } catch (error) {
-    console.warn(`[lmstudio-models] Failed to fetch models from LM Studio EP: ${error}`);
+    console.warn(`[lmstudio-models] Failed to fetch models from ${endpoint.provider}: ${error}`);
     return [];
   }
 }
@@ -246,6 +326,7 @@ export async function fetchLMStudioModels(): Promise<LMStudioModel[]> {
 export function registerLMStudioProvider(
   pi: ExtensionAPI,
   providerModels: LMStudioProviderModel[],
+  endpoint: LMStudioEndpoint = DEFAULT_LMSTUDIO_ENDPOINT,
 ): number {
   if (providerModels.length === 0) {
     console.warn("[lmstudio-models] No valid models found to register");
@@ -257,9 +338,9 @@ export function registerLMStudioProvider(
     console.error(`  - ${m.name} (${m.id}): reasoning=${m.reasoning}, multimodal=${m.multimodal}`);
   });
 
-  pi.registerProvider(LMSTUDIO_PROVIDER_NAME, {
-    baseUrl: LMSTUDIO_PROVIDER_BASE_URL,
-    apiKey: LMSTUDIO_API_KEY ?? "lm-studio",
+  pi.registerProvider(endpoint.provider, {
+    baseUrl: `${endpoint.baseUrl}/v1`,
+    apiKey: endpoint.apiKey ?? "lm-studio",
     authHeader: true,
     api: "openai-completions",
     models: providerModels.map((m) => ({
@@ -274,7 +355,7 @@ export function registerLMStudioProvider(
   });
 
   console.error(
-    `[lmstudio-models] Registered provider '${LMSTUDIO_PROVIDER_NAME}' with ${providerModels.length} models`,
+    `[lmstudio-models] Registered provider '${endpoint.provider}' with ${providerModels.length} models`,
   );
 
   return providerModels.length;
@@ -284,26 +365,44 @@ export function registerLMStudioProvider(
 // Extension Entry Point
 // =============================================================================
 
-export default async function registerLMStudioExtension(pi: ExtensionAPI) {
+async function refreshLMStudioProvider(
+  pi: ExtensionAPI,
+  endpoint: LMStudioEndpoint,
+): Promise<number> {
+  const providerModels = convertToProviderModels(await fetchLMStudioModels(endpoint));
+
+  if (providerModels.length === 0) {
+    return 0;
+  }
+
+  pi.unregisterProvider(endpoint.provider);
+  return registerLMStudioProvider(pi, providerModels, endpoint);
+}
+
+export default async function registerLMStudioExtension(
+  pi: ExtensionAPI,
+  configuredEndpoints?: LMStudioEndpoint[],
+) {
+  const endpoints = configuredEndpoints ?? (await loadLMStudioEndpoints());
+
   pi.registerCommand(LMSTUDIO_REFRESH_COMMAND, {
-    description: "Refresh LM Studio models from REST API /api/v1/models",
+    description: "Refresh models from every configured LM Studio endpoint",
     handler: async (_args, ctx) => {
-      ctx.ui.notify("Fetching LM Studio models...", "info");
+      ctx.ui.notify(`Fetching models from ${endpoints.length} LM Studio endpoint(s)...`, "info");
 
-      const providerModels = convertToProviderModels(await fetchLMStudioModels());
+      const counts = await Promise.all(
+        endpoints.map((endpoint) => refreshLMStudioProvider(pi, endpoint)),
+      );
+      const registeredCount = counts.reduce((total, count) => total + count, 0);
 
-      if (providerModels.length === 0) {
+      if (registeredCount === 0) {
         ctx.ui.notify("No valid models found or LM Studio is not running", "error");
         return;
       }
-
-      pi.unregisterProvider(LMSTUDIO_PROVIDER_NAME);
-      const registeredCount = registerLMStudioProvider(pi, providerModels);
 
       ctx.ui.notify(`Updated ${registeredCount} LM Studio model(s)`, "info");
     },
   });
 
-  const providerModels = convertToProviderModels(await fetchLMStudioModels());
-  registerLMStudioProvider(pi, providerModels);
+  await Promise.all(endpoints.map((endpoint) => refreshLMStudioProvider(pi, endpoint)));
 }

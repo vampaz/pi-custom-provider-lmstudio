@@ -1,17 +1,18 @@
 # pi Extension: LM Studio Models Sync
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![pi Package](https://img.shields.io/badge/pi-package-2.0.0-orange)](https://github.com/vampaz/pi-custom-provider-lmstudio)
+[![pi Package](https://img.shields.io/badge/pi-package-3.0.0-orange)](https://github.com/vampaz/pi-custom-provider-lmstudio)
 [![Vitest](https://img.shields.io/badge/tested_with-vitest-00C248.svg)](https://vitest.dev/)
 [![oxlint](https://img.shields.io/badge/lint-oxlint-orange.svg)](https://github.com/oxc-project/oxc)
 [![oxfmt](https://img.shields.io/badge/format-oxfmt-orange.svg)](https://github.com/oxc-project/oxc)
 
-An extension for the [pi coding agent](https://github.com/earendil-works/pi-mono) that fetches logical models from LM Studio's REST API (`/api/v1/models`) and registers them as a pi provider.
+An extension for the [pi coding agent](https://github.com/earendil-works/pi-mono) that fetches logical models from one or more LM Studio REST APIs (`/api/v1/models`) and registers each endpoint as a pi provider.
 
 ## Features
 
-- **Auto-sync**: Fetches models from LM Studio EP during pi startup
-- **Dynamic Registration**: Models appear in the model selector immediately
+- **Auto-sync**: Fetches models from every configured LM Studio endpoint during pi startup
+- **Multiple Endpoints**: Use local and LAN-hosted LM Studio servers at the same time
+- **Dynamic Registration**: Models appear in the model selector immediately, grouped by endpoint provider
 - **Manual Refresh**: `/lmstudio-refresh` command to update models manually
 - **Accurate Context Windows**: Uses LM Studio's `max_context_length` and loaded-instance configuration when available
 - **Smart Detection**: Uses LM Studio's vision and reasoning capabilities and falls back to explicit model-key markers when needed
@@ -22,15 +23,15 @@ An extension for the [pi coding agent](https://github.com/earendil-works/pi-mono
 ## Requirements
 
 - LM Studio 0.4.0 or newer must be running with the Endpoint server enabled
-- Default EP URL: `http://localhost:1234`
-- The `/api/v1/models` endpoint should be accessible
+- Each server must expose `/api/v1/models` to the machine running pi
+- The zero-config default is `http://localhost:1234`
 
 ## Installation
 
 ### Install via pi CLI
 
 ```bash
-pi install git:github.com/vampaz/pi-custom-provider-lmstudio@v2.0.0
+pi install git:github.com/vampaz/pi-custom-provider-lmstudio@v3.0.0
 ```
 
 You can also try the local package without installing it globally:
@@ -54,9 +55,10 @@ cp -r ~/works/pi-lmstudio-models ~/.pi/agent/extensions/lmstudio-models
 
 When you start a new pi session, the extension will automatically:
 
-1. Fetch model metadata from `http://localhost:1234/api/v1/models`
-2. Register chat and vision models as the `lmstudio-ep` provider
-3. Make models available in the model selector with their reported context windows
+1. Read endpoints from `~/.pi/agent/lmstudio-models.json`, or use the local default when that file does not exist
+2. Fetch model metadata from every endpoint
+3. Register chat and vision models under each endpoint's provider name
+4. Make models available in the model selector with their reported context windows
 
 ### Manual refresh
 
@@ -72,17 +74,36 @@ Use the model selector to choose from your LM Studio models:
 
 ```
 /model
-# Select lmstudio-ep provider and pick a model
+# Select a configured LM Studio provider and pick a model
 ```
 
 ## Provider Configuration
 
-- **Provider Name**: `lmstudio-ep`
-- **Base URL**: Configurable via `LMSTUDIO_ENDPOINT_URL` env var, defaults to `http://localhost:1234`
-- **Discovery API**: LM Studio REST API at `/api/v1/models`
-- **Inference API**: OpenAI-compatible completions at `/v1`
-- **API Key**: Optional Bearer token via `LMSTUDIO_API_KEY`
-- **Context Window Source**: Loaded-instance `config.context_length` or `max_context_length` from LM Studio when available, otherwise explicit `8k`, `32k`, `128k`, or `1m` style hints from the model key
+Create `~/.pi/agent/lmstudio-models.json` to configure multiple endpoints:
+
+```json
+[
+  {
+    "provider": "lmstudio-local",
+    "baseUrl": "http://localhost:1234"
+  },
+  {
+    "provider": "lmstudio-lan",
+    "baseUrl": "http://192.168.1.50:1234",
+    "apiKey": "optional-bearer-token"
+  }
+]
+```
+
+Provider names must be unique, start with a lowercase letter or number, and otherwise contain only lowercase letters, numbers, dots, underscores, or hyphens. Run `/reload` after editing the file.
+
+If the file does not exist, the extension uses this default:
+
+```json
+[{ "provider": "lmstudio-ep", "baseUrl": "http://localhost:1234" }]
+```
+
+Each provider uses LM Studio's REST API at `/api/v1/models` for discovery and its OpenAI-compatible `/v1` API for inference. Context windows come from loaded-instance `config.context_length` or `max_context_length` when available, then explicit `8k`, `32k`, `128k`, or `1m` hints in the model key.
 
 ## Development
 
@@ -104,25 +125,10 @@ npm run format
 # Run tests with vitest
 npm test
 
-# Run integration tests (requires local LM Studio running on port 1234)
+# Run integration tests against the configured endpoints (local port 1234 by default)
 npm run test:integration
 
 # Test in pi (hot-reload)
-pi -e .
-```
-
-### Environment Variables
-
-You can customize the extension behavior using environment variables:
-
-| Variable                | Description                   | Default                 |
-| ----------------------- | ----------------------------- | ----------------------- |
-| `LMSTUDIO_ENDPOINT_URL` | Custom LM Studio endpoint URL | `http://localhost:1234` |
-
-Example:
-
-```bash
-export LMSTUDIO_ENDPOINT_URL=http://localhost:1234
 pi -e .
 ```
 
@@ -151,8 +157,9 @@ pi -e .
 
 ### Models not showing up
 
-- Ensure LM Studio is running with the Endpoint server enabled
-- Check that `http://localhost:1234/api/v1/models` is accessible in your browser
+- Ensure each configured LM Studio server is running with the Endpoint server enabled
+- Check that each configured `baseUrl` exposes `/api/v1/models`
+- For LAN servers, enable network access in LM Studio and allow port `1234` through the host firewall
 - Check the pi debug output for error messages
 
 ### Wrong context window or capabilities
@@ -160,13 +167,14 @@ pi -e .
 - Make sure LM Studio's REST API is enabled and returning `max_context_length` and `capabilities`
 - If metadata is unavailable, add explicit hints to the model key when possible, such as `32k`, `128k`, `vision`, or `thinking`
 - Use `/lmstudio-refresh` after renaming or reloading models in LM Studio
+- Use `/reload` after changing `lmstudio-models.json`
 
 ### Connection refused
 
-If you see "Failed to fetch models from LM Studio EP: TypeError: Failed to fetch":
+If you see "Failed to fetch models from &lt;provider&gt;: TypeError: Failed to fetch":
 
-- Verify LM Studio's Endpoint is running on port 1234 (or the custom URL set in `LMSTUDIO_ENDPOINT_URL`)
-- To use a custom endpoint, set the environment variable: `export LMSTUDIO_ENDPOINT_URL=http://your-custom-url:port`
+- Verify that provider's configured `baseUrl` is reachable from the machine running pi
+- Verify LM Studio is listening on the configured interface and port
 
 ## License
 
